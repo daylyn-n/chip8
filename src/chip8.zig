@@ -3,10 +3,29 @@ const std = @import("std");
 //define a chip8 struct
 // for now, just keep I,
 
-pub const Chip8 = struct { i: u16 = 0, stack: [16]u16 = @splat(0), stack_ptr: u8 = 0, memory: [4096]u8 = @splat(0) };
+pub const Chip8 = struct {
+    i: u16 = 0,
+    stack: [16]u16 = @splat(0),
+    stack_ptr: u8 = 0,
+    memory: [4096]u8 = @splat(0),
+    pc: u16 = 0x200, // chip8 ROM starts at 0x200
+    V: [16]u16 = @splat(0),
+    pub const init = Chip8Init;
+};
+
+pub const Instructions = struct {
+    raw: u16 = 0,
+    opcode: u4 = 0,
+    NNN: u12 = 0,
+    NN: u8 = 0,
+    N: u4 = 0,
+    X: u4 = 0,
+    Y: u4 = 0,
+    pub const decode_ = Decode;
+};
 
 pub const StackError = error{ StackOverflow, StackUnderflow };
-pub fn push(self: *Chip8, addr: u16) !void {
+pub fn push(self: *Chip8, addr: u16) !u16 {
     if (self.stack_ptr == self.stack.len) return error.StackOverflow;
     self.stack[self.stack_ptr] = addr;
     self.stack_ptr += 1;
@@ -44,6 +63,27 @@ pub fn Chip8Init() Chip8 {
     }
 
     return c;
+}
+
+// TODO implement chip8 instructions
+// fetch/decode/exectute loop
+
+pub fn Decode(raw: u16) Instructions {
+    return .{
+        .raw = raw,
+        .opcode = @truncate(raw >> 12),
+        .NNN = @truncate(raw),
+        .NN = @truncate(raw),
+        .N = @truncate(raw),
+        .X = @truncate(raw >> 8),
+        .Y = @truncate(raw >> 4),
+    };
+}
+pub fn Fetch(self: *Chip8) Instructions {
+    const hi_bits: u16 = self.memory[self.pc];
+    const low_bits: u16 = self.memory[self.pc + 1];
+    self.pc += 2;
+    return Decode((hi_bits << 8) | low_bits);
 }
 
 pub fn main() void {
