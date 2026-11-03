@@ -1,15 +1,26 @@
 const std = @import("std");
+const expect = std.testing.expect;
 
-//define a chip8 struct
-// for now, just keep I,
+const State = enum {
+    RUNNING,
+    PAUSE,
+    QUIT,
+};
 
+test "Correct state to int" {
+    try expect(@backingInt(State.RUNNING) == 0);
+    try expect(@backingInt(State.PAUSE) == 1);
+    try expect(@backingInt(State.QUIT) == 2);
+}
 pub const Chip8 = struct {
     i: u16 = 0,
     stack: [16]u16 = @splat(0),
     stack_ptr: u8 = 0,
     memory: [4096]u8 = @splat(0),
     pc: u16 = 0x200, // chip8 ROM starts at 0x200
-    V: [16]u16 = @splat(0),
+    V: [16]u8 = @splat(0),
+    display: [64 * 32]bool = @splat(false),
+    state: State = .RUNNING,
     pub const init = Chip8Init;
 };
 
@@ -62,6 +73,8 @@ pub fn Chip8Init() Chip8 {
         c.memory[0x050 + idx] = byte;
     }
 
+    // TODO LOAD ROM
+
     return c;
 }
 
@@ -86,27 +99,46 @@ pub fn Fetch(self: *Chip8) Instructions {
     return Decode((hi_bits << 8) | low_bits);
 }
 
-pub fn main() void {
-    const c = Chip8Init();
-
-    // 16 digits, 0 to F. Each digit is 5 bytes.
-    for (0..16) |digit| {
-        // Address of the first byte of this digit: 0x050, 0x055, 0x05A, ...
-        const start = 0x050 + digit * 5;
-        std.debug.print("digit {X} at 0x{X:0>3}\n", .{ digit, start });
-
-        // The 5 bytes of this digit. The second counter starts at `start`,
-        // so `addr` is the real memory address, not 0, 1, 2, ...
-        for (c.memory[start..][0..5], start..) |byte, addr| {
-            std.debug.print("  0x{X:0>3}: {X:0>2}  ", .{ addr, byte });
-
-            // The 4 high bits of the byte are the 4 pixels, left to right.
-            // 0x80 >> col selects bit 7, 6, 5, 4.
-            for (0..4) |col| {
-                const on = byte & (@as(u8, 0x80) >> @intCast(col)) != 0;
-                std.debug.print("{s}", .{if (on) "#" else "."});
-            }
-            std.debug.print("\n", .{});
-        }
+//TODO
+//Start with the minimum set needed to run the IBM logo ROM,
+//the standard first test:
+//00E0 clears the screen
+//1NNN jumps
+//6XNN sets VX
+//7XNN adds to VX
+//ANNN sets I
+//DXYN draws a sprite
+pub fn Execute(self: *Chip8, inst: Instructions) void {
+    switch (inst.opcode) {
+        0x0 => {},
+        0x1 => {
+            self.pc = inst.NNN;
+        },
+        0x2 => {},
+        0x3 => {},
+        0x4 => {},
+        0x5 => {},
+        0x6 => {},
+        0x7 => {},
+        0x8 => {},
+        0x9 => {},
+        0xA => {},
+        0xB => {},
+        0xC => {},
+        0xD => {},
+        0xE => {},
+        0xF => {},
     }
+}
+
+test "1NNN Jumps" {
+    var c = Chip8Init();
+    std.debug.print("PC at the start {X:0>3}\n", .{c.pc});
+    c.memory[0x200] = 0x12;
+    c.memory[0x201] = 0x34;
+    const inst = Fetch(&c);
+    Execute(&c, inst);
+
+    std.debug.print("PC after fetch/decode/ex {X:0>3}\n", .{c.pc});
+    try std.testing.expectEqual(c.pc, 0x234);
 }
