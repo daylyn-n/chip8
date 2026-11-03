@@ -13,7 +13,7 @@ test "Correct state to int" {
     try expect(@backingInt(State.QUIT) == 2);
 }
 pub const Chip8 = struct {
-    i: u16 = 0,
+    I: u16 = 0,
     stack: [16]u16 = @splat(0),
     stack_ptr: u8 = 0,
     memory: [4096]u8 = @splat(0),
@@ -99,18 +99,48 @@ pub fn Fetch(self: *Chip8) Instructions {
     return Decode((hi_bits << 8) | low_bits);
 }
 
-//TODO
-//Start with the minimum set needed to run the IBM logo ROM,
-//the standard first test:
-//00E0 clears the screen
-//1NNN jumps
-//6XNN sets VX
-//7XNN adds to VX
-//ANNN sets I
-//DXYN draws a sprite
+// helper for the draw instructino
+
+// DXYN: draw an N-row sprite from memory[I] at (V[X], V[Y]).
+// Each sprite byte is one row of 8 pixels; bit 7 is the leftmost pixel.
+// Pixels are XORed onto the screen. VF = 1 if any pixel turns off.
+pub fn Draw(self: *Chip8, inst: Instructions) void {
+    const width = 64;
+    const height = 32;
+
+    // Only the start position wraps. usize so the index math cannot overflow.
+    const x: usize = self.V[inst.X] % width;
+    const y: usize = self.V[inst.Y] % height;
+
+    self.V[0xF] = 0;
+
+    for (0..inst.N) |row| {
+        const screen_y = y + row;
+        if (screen_y >= height) break; // clip at the bottom edge
+
+        const sprite_byte = self.memory[self.I + row];
+
+        for (0..8) |col| {
+            const screen_x = x + col;
+            if (screen_x >= width) break; // clip at the right edge
+
+            const bit_on = sprite_byte & (@as(u8, 0x80) >> @intCast(col)) != 0;
+            if (!bit_on) continue;
+
+            const idx = screen_y * width + screen_x;
+            if (self.display[idx]) self.V[0xF] = 1; // collision: pixel turns off
+            self.display[idx] = !self.display[idx];
+        }
+    }
+}
+
 pub fn Execute(self: *Chip8, inst: Instructions) void {
     switch (inst.opcode) {
-        0x0 => {},
+        0x0 => {
+            if (inst.raw == 0x00E0) {
+                self.display = @splat(false);
+            }
+        },
         0x1 => {
             self.pc = inst.NNN;
         },
@@ -118,14 +148,23 @@ pub fn Execute(self: *Chip8, inst: Instructions) void {
         0x3 => {},
         0x4 => {},
         0x5 => {},
-        0x6 => {},
-        0x7 => {},
+        0x6 => {
+            self.V[inst.X] = inst.NN;
+        },
+
+        0x7 => {
+            self.V[inst.X] +%= inst.NN;
+        },
         0x8 => {},
         0x9 => {},
-        0xA => {},
+        0xA => {
+            self.I = inst.NNN;
+        },
         0xB => {},
         0xC => {},
-        0xD => {},
+        0xD => {
+            Draw(self, inst);
+        },
         0xE => {},
         0xF => {},
     }
@@ -141,4 +180,66 @@ test "1NNN Jumps" {
 
     std.debug.print("PC after fetch/decode/ex {X:0>3}\n", .{c.pc});
     try std.testing.expectEqual(c.pc, 0x234);
+}
+
+test "6XNN store in X reg" {
+    var c = Chip8Init();
+    // should store 0x2B in V[0xA]
+    c.memory[0x200] = 0x6A;
+    c.memory[0x201] = 0x2B;
+    const inst = Fetch(&c);
+    Execute(&c, inst);
+    try std.testing.expectEqual(c.V[inst.X], 0x2B);
+}
+
+test "DXYN draws font 0, then XOR erases it and sets VF" {
+    var c = Chip8Init();
+    c.I = 0x050; // font for digit 0
+    c.V[0] = 0;
+    c.V[1] = 0;
+
+    Execute(&c, Decode(0xD015));
+    // Row 0 of the "0" glyph is 0xF0: four pixels on, then off.
+    try std.testing.expectEqual(true, c.display[0]);
+    try std.testing.expectEqual(true, c.display[3]);
+    try std.testing.expectEqual(false, c.display[4]);
+    // Row 1 is 0x90: pixel 0 and pixel 3 on.
+    try std.testing.expectEqual(true, c.display[64 + 0]);
+    try std.testing.expectEqual(false, c.display[64 + 1]);
+    try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
+
+    Execute(&c, Decode(0xD015));
+    try std.testing.expect(std.mem.allEqual(bool, &c.display, false));
+    try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
+}
+
+test "DXYN clips at the right edge" {
+    var c = Chip8Init();
+    c.I = 0x050;
+    c.V[0] = 62; // only 2 of the 4 lit columns fit
+    c.V[1] = 0;
+
+    Execute(&c, Decode(0xD011));
+    try std.testing.expectEqual(true, c.display[62]);
+    try std.testing.expectEqual(true, c.display[63]);
+    try std.testing.expectEqual(false, c.display[64]); // must not wrap to row 1
+}
+
+test "ANNN with DXYN" {
+    var c = Chip8Init();
+
+    Execute(&c, Decode(0xA050));
+    Execute(&c, Decode(0xD015));
+    // Row 0 of the "0" glyph is 0xF0: four pixels on, then off.
+    try std.testing.expectEqual(true, c.display[0]);
+    try std.testing.expectEqual(true, c.display[3]);
+    try std.testing.expectEqual(false, c.display[4]);
+    // Row 1 is 0x90: pixel 0 and pixel 3 on.
+    try std.testing.expectEqual(true, c.display[64 + 0]);
+    try std.testing.expectEqual(false, c.display[64 + 1]);
+    try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
+
+    Execute(&c, Decode(0xD015));
+    try std.testing.expect(std.mem.allEqual(bool, &c.display, false));
+    try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
 }
