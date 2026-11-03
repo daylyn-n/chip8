@@ -73,13 +73,32 @@ pub fn Chip8Init() Chip8 {
         c.memory[0x050 + idx] = byte;
     }
 
-    // TODO LOAD ROM
-
     return c;
 }
 
-// TODO implement chip8 instructions
-// fetch/decode/exectute loop
+pub const rom_start = 0x200;
+pub const max_rom_size = 4096 - rom_start; // 3584 bytes
+
+pub const LoadRomError = error{RomTooLarge};
+
+// Copy ROM bytes into memory at 0x200. No file I/O here, so tests can pass
+// a plain byte array. main.zig reads the file.
+pub fn LoadRom(self: *Chip8, rom: []const u8) LoadRomError!void {
+    if (rom.len > max_rom_size) return error.RomTooLarge;
+    @memcpy(self.memory[rom_start..][0..rom.len], rom);
+}
+
+test "LoadRom copies bytes to 0x200" {
+    var c = Chip8Init();
+    try LoadRom(&c, &.{ 0x00, 0xE0, 0x12, 0x00 });
+    try std.testing.expectEqualSlices(u8, &.{ 0x00, 0xE0, 0x12, 0x00 }, c.memory[0x200..0x204]);
+}
+
+test "LoadRom rejects a ROM that is too large" {
+    var c = Chip8Init();
+    const big: [max_rom_size + 1]u8 = @splat(0);
+    try std.testing.expectError(error.RomTooLarge, LoadRom(&c, &big));
+}
 
 pub fn Decode(raw: u16) Instructions {
     return .{
@@ -101,9 +120,6 @@ pub fn Fetch(self: *Chip8) Instructions {
 
 // helper for the draw instructino
 
-// DXYN: draw an N-row sprite from memory[I] at (V[X], V[Y]).
-// Each sprite byte is one row of 8 pixels; bit 7 is the leftmost pixel.
-// Pixels are XORed onto the screen. VF = 1 if any pixel turns off.
 pub fn Draw(self: *Chip8, inst: Instructions) void {
     const width = 64;
     const height = 32;
@@ -116,7 +132,7 @@ pub fn Draw(self: *Chip8, inst: Instructions) void {
 
     for (0..inst.N) |row| {
         const screen_y = y + row;
-        if (screen_y >= height) break; // clip at the bottom edge
+        if (screen_y >= height) break;
 
         const sprite_byte = self.memory[self.I + row];
 
