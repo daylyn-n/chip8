@@ -21,7 +21,18 @@ pub const Chip8 = struct {
     V: [16]u8 = @splat(0),
     display: [64 * 32]bool = @splat(false),
     state: State = .RUNNING,
+    quirks: Quirks = .{},
     pub const init = Chip8Init;
+};
+
+// Some instructions behave differently on different CHIP-8 versions.
+// The defaults follow the original COSMAC VIP interpreter.
+pub const Quirks = struct {
+    // 8XY6 / 8XYE: true = shift V[Y] into V[X] (original).
+    // false = shift V[X] in place (CHIP-48 / SUPER-CHIP).
+    shift_uses_vy: bool = true,
+    // 8XY1 / 8XY2 / 8XY3: true = also set VF to 0 (original).
+    logic_resets_vf: bool = true,
 };
 
 pub const Instructions = struct {
@@ -36,13 +47,13 @@ pub const Instructions = struct {
 };
 
 pub const StackError = error{ StackOverflow, StackUnderflow };
-pub fn push(self: *Chip8, addr: u16) !u16 {
+// stack_ptr is the index of the next FREE slot (0 = empty, 16 = full).
+pub fn push(self: *Chip8, addr: u16) StackError!void {
     if (self.stack_ptr == self.stack.len) return error.StackOverflow;
     self.stack[self.stack_ptr] = addr;
     self.stack_ptr += 1;
-    return self.stack[self.stack_ptr];
 }
-pub fn pop(self: *Chip8) !u16 {
+pub fn pop(self: *Chip8) StackError!u16 {
     if (self.stack_ptr == 0) return error.StackUnderflow;
     self.stack_ptr -= 1;
     return self.stack[self.stack_ptr];
@@ -150,17 +161,87 @@ pub fn Draw(self: *Chip8, inst: Instructions) void {
     }
 }
 
-pub fn Execute(self: *Chip8, inst: Instructions) void {
+// 8XY_: register-to-register math and logic. N selects the operation.
+// VF is always written LAST, so if X is F the flag wins over the result.
+pub fn Arithmetic(self: *Chip8, inst: Instructions) void {
+    const vx = self.V[inst.X];
+    const vy = self.V[inst.Y];
+
+    switch (inst.N) {
+        // 8XY0: VX = VY
+        0x0 => self.V[inst.X] = vy,
+
+        // 8XY1 / 8XY2 / 8XY3: OR, AND, XOR
+        0x1, 0x2, 0x3 => {
+            self.V[inst.X] = switch (inst.N) {
+                0x1 => vx | vy,
+                0x2 => vx & vy,
+                else => vx ^ vy,
+            };
+            if (self.quirks.logic_resets_vf) self.V[0xF] = 0;
+        },
+
+        // 8XY4: VX = VX + VY, VF = 1 on carry (sum > 255)
+        0x4 => {
+            const sum, const carry = @addWithOverflow(vx, vy);
+            self.V[inst.X] = sum;
+            self.V[0xF] = carry;
+        },
+
+        // 8XY5: VX = VX - VY, VF = 1 if there is NO borrow (VX >= VY)
+        0x5 => {
+            const diff, const borrow = @subWithOverflow(vx, vy);
+            self.V[inst.X] = diff;
+            self.V[0xF] = 1 - borrow;
+        },
+
+        // 8XY7: VX = VY - VX, VF = 1 if there is NO borrow (VY >= VX)
+        0x7 => {
+            const diff, const borrow = @subWithOverflow(vy, vx);
+            self.V[inst.X] = diff;
+            self.V[0xF] = 1 - borrow;
+        },
+
+        // 8XY6: shift right by 1, VF = the bit that falls out (bit 0)
+        0x6 => {
+            const src = if (self.quirks.shift_uses_vy) vy else vx;
+            self.V[inst.X] = src >> 1;
+            self.V[0xF] = src & 0x01;
+        },
+
+        // 8XYE: shift left by 1, VF = the bit that falls out (bit 7)
+        0xE => {
+            const src = if (self.quirks.shift_uses_vy) vy else vx;
+            self.V[inst.X] = src << 1;
+            self.V[0xF] = src >> 7;
+        },
+
+        // 8XY8 to 8XYD and 8XYF do not exist. Ignore them for now.
+        else => {},
+    }
+}
+
+pub const ExecuteError = StackError;
+
+pub fn Execute(self: *Chip8, inst: Instructions) ExecuteError!void {
     switch (inst.opcode) {
-        0x0 => {
-            if (inst.raw == 0x00E0) {
-                self.display = @splat(false);
-            }
+        0x0 => switch (inst.raw) {
+            // 00E0: clear the screen
+            0x00E0 => self.display = @splat(false),
+            // 00EE: return from a subroutine
+            0x00EE => self.pc = try pop(self),
+            // 0NNN: old machine-code call, not used by modern emulators
+            else => {},
         },
         0x1 => {
             self.pc = inst.NNN;
         },
-        0x2 => {},
+        // 2NNN: call the subroutine at NNN. Fetch already moved pc past this
+        // instruction, so the saved pc is the return address.
+        0x2 => {
+            try push(self, self.pc);
+            self.pc = inst.NNN;
+        },
         0x3 => {},
         0x4 => {},
         0x5 => {},
@@ -171,7 +252,9 @@ pub fn Execute(self: *Chip8, inst: Instructions) void {
         0x7 => {
             self.V[inst.X] +%= inst.NN;
         },
-        0x8 => {},
+        0x8 => {
+            Arithmetic(self, inst);
+        },
         0x9 => {},
         0xA => {
             self.I = inst.NNN;
@@ -188,13 +271,11 @@ pub fn Execute(self: *Chip8, inst: Instructions) void {
 
 test "1NNN Jumps" {
     var c = Chip8Init();
-    std.debug.print("PC at the start {X:0>3}\n", .{c.pc});
     c.memory[0x200] = 0x12;
     c.memory[0x201] = 0x34;
     const inst = Fetch(&c);
-    Execute(&c, inst);
+    try Execute(&c, inst);
 
-    std.debug.print("PC after fetch/decode/ex {X:0>3}\n", .{c.pc});
     try std.testing.expectEqual(c.pc, 0x234);
 }
 
@@ -204,7 +285,7 @@ test "6XNN store in X reg" {
     c.memory[0x200] = 0x6A;
     c.memory[0x201] = 0x2B;
     const inst = Fetch(&c);
-    Execute(&c, inst);
+    try Execute(&c, inst);
     try std.testing.expectEqual(c.V[inst.X], 0x2B);
 }
 
@@ -214,7 +295,7 @@ test "DXYN draws font 0, then XOR erases it and sets VF" {
     c.V[0] = 0;
     c.V[1] = 0;
 
-    Execute(&c, Decode(0xD015));
+    try Execute(&c, Decode(0xD015));
     // Row 0 of the "0" glyph is 0xF0: four pixels on, then off.
     try std.testing.expectEqual(true, c.display[0]);
     try std.testing.expectEqual(true, c.display[3]);
@@ -224,7 +305,7 @@ test "DXYN draws font 0, then XOR erases it and sets VF" {
     try std.testing.expectEqual(false, c.display[64 + 1]);
     try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
 
-    Execute(&c, Decode(0xD015));
+    try Execute(&c, Decode(0xD015));
     try std.testing.expect(std.mem.allEqual(bool, &c.display, false));
     try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
 }
@@ -235,7 +316,7 @@ test "DXYN clips at the right edge" {
     c.V[0] = 62; // only 2 of the 4 lit columns fit
     c.V[1] = 0;
 
-    Execute(&c, Decode(0xD011));
+    try Execute(&c, Decode(0xD011));
     try std.testing.expectEqual(true, c.display[62]);
     try std.testing.expectEqual(true, c.display[63]);
     try std.testing.expectEqual(false, c.display[64]); // must not wrap to row 1
@@ -244,8 +325,8 @@ test "DXYN clips at the right edge" {
 test "ANNN with DXYN" {
     var c = Chip8Init();
 
-    Execute(&c, Decode(0xA050));
-    Execute(&c, Decode(0xD015));
+    try Execute(&c, Decode(0xA050));
+    try Execute(&c, Decode(0xD015));
     // Row 0 of the "0" glyph is 0xF0: four pixels on, then off.
     try std.testing.expectEqual(true, c.display[0]);
     try std.testing.expectEqual(true, c.display[3]);
@@ -255,7 +336,142 @@ test "ANNN with DXYN" {
     try std.testing.expectEqual(false, c.display[64 + 1]);
     try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
 
-    Execute(&c, Decode(0xD015));
+    try Execute(&c, Decode(0xD015));
     try std.testing.expect(std.mem.allEqual(bool, &c.display, false));
     try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
+}
+
+// Helper for the 8XY_ tests: set V[X] and V[Y], run one instruction.
+fn run8(c: *Chip8, raw: u16, vx: u8, vy: u8) !void {
+    const inst = Decode(raw);
+    c.V[inst.X] = vx;
+    c.V[inst.Y] = vy;
+    try Execute(c, inst);
+}
+
+test "8XY0 copies VY into VX" {
+    var c = Chip8Init();
+    try run8(&c, 0x8120, 0x00, 0x42);
+    try std.testing.expectEqual(@as(u8, 0x42), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 0x42), c.V[2]);
+}
+
+test "8XY1 / 8XY2 / 8XY3 logic, VF reset quirk" {
+    var c = Chip8Init();
+    c.V[0xF] = 5;
+    try run8(&c, 0x8121, 0b1100, 0b1010);
+    try std.testing.expectEqual(@as(u8, 0b1110), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
+
+    try run8(&c, 0x8122, 0b1100, 0b1010);
+    try std.testing.expectEqual(@as(u8, 0b1000), c.V[1]);
+
+    try run8(&c, 0x8123, 0b1100, 0b1010);
+    try std.testing.expectEqual(@as(u8, 0b0110), c.V[1]);
+
+    // With the quirk off, VF is not touched.
+    c.quirks.logic_resets_vf = false;
+    c.V[0xF] = 5;
+    try run8(&c, 0x8121, 1, 2);
+    try std.testing.expectEqual(@as(u8, 5), c.V[0xF]);
+}
+
+test "8XY4 add with carry" {
+    var c = Chip8Init();
+    try run8(&c, 0x8124, 200, 50);
+    try std.testing.expectEqual(@as(u8, 250), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
+
+    try run8(&c, 0x8124, 200, 100); // 300 wraps to 44
+    try std.testing.expectEqual(@as(u8, 44), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
+}
+
+test "8XY5 subtract, VF = no borrow" {
+    var c = Chip8Init();
+    try run8(&c, 0x8125, 50, 20);
+    try std.testing.expectEqual(@as(u8, 30), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
+
+    try run8(&c, 0x8125, 20, 50); // -30 wraps to 226
+    try std.testing.expectEqual(@as(u8, 226), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
+
+    try run8(&c, 0x8125, 7, 7); // equal: no borrow
+    try std.testing.expectEqual(@as(u8, 0), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
+}
+
+test "8XY7 reverse subtract, VF = no borrow" {
+    var c = Chip8Init();
+    try run8(&c, 0x8127, 20, 50);
+    try std.testing.expectEqual(@as(u8, 30), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
+
+    try run8(&c, 0x8127, 50, 20);
+    try std.testing.expectEqual(@as(u8, 226), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
+}
+
+test "8XY6 / 8XYE shifts use VY by default" {
+    var c = Chip8Init();
+    try run8(&c, 0x8126, 0xFF, 0b0000_0011);
+    try std.testing.expectEqual(@as(u8, 0b0000_0001), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
+
+    try run8(&c, 0x812E, 0x00, 0b1000_0001);
+    try std.testing.expectEqual(@as(u8, 0b0000_0010), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
+}
+
+test "8XY6 / 8XYE shift VX in place with the quirk off" {
+    var c = Chip8Init();
+    c.quirks.shift_uses_vy = false;
+    try run8(&c, 0x8126, 0b0000_0100, 0xFF);
+    try std.testing.expectEqual(@as(u8, 0b0000_0010), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
+
+    try run8(&c, 0x812E, 0b0100_0000, 0xFF);
+    try std.testing.expectEqual(@as(u8, 0b1000_0000), c.V[1]);
+    try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
+}
+
+test "8XY_ writes VF last when X is F" {
+    var c = Chip8Init();
+    try run8(&c, 0x8F14, 200, 100); // VF = VF + V1, carry
+    try std.testing.expectEqual(@as(u8, 1), c.V[0xF]); // flag, not the sum 44
+}
+
+test "2NNN calls and 00EE returns" {
+    var c = Chip8Init();
+    // 0x200: call 0x300.  0x300: return.
+    try LoadRom(&c, &.{ 0x23, 0x00 });
+    c.memory[0x300] = 0x00;
+    c.memory[0x301] = 0xEE;
+
+    try Execute(&c, Fetch(&c)); // 2300
+    try std.testing.expectEqual(@as(u16, 0x300), c.pc);
+    try std.testing.expectEqual(@as(u8, 1), c.stack_ptr);
+    try std.testing.expectEqual(@as(u16, 0x202), c.stack[0]); // return address
+
+    try Execute(&c, Fetch(&c)); // 00EE
+    try std.testing.expectEqual(@as(u16, 0x202), c.pc);
+    try std.testing.expectEqual(@as(u8, 0), c.stack_ptr);
+}
+
+test "nested calls return in reverse order" {
+    var c = Chip8Init();
+    try push(&c, 0x111);
+    try push(&c, 0x222);
+    try std.testing.expectEqual(@as(u16, 0x222), try pop(&c));
+    try std.testing.expectEqual(@as(u16, 0x111), try pop(&c));
+}
+
+test "stack overflow and underflow are errors" {
+    var c = Chip8Init();
+    try std.testing.expectError(error.StackUnderflow, Execute(&c, Decode(0x00EE)));
+
+    for (0..16) |_| try Execute(&c, Decode(0x2400));
+    try std.testing.expectError(error.StackOverflow, Execute(&c, Decode(0x2400)));
+    try std.testing.expectEqual(@as(u8, 16), c.stack_ptr);
 }

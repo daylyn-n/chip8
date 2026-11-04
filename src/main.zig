@@ -30,7 +30,7 @@ pub fn main(init: std.process.Init) !void {
     var cycles: usize = 0;
     while (c.state == .RUNNING) {
         const inst = chip.Fetch(&c);
-        chip.Execute(&c, inst);
+        try chip.Execute(&c, inst);
         cycles += 1;
         if (cycles >= max_cycles) c.state = .QUIT;
     }
