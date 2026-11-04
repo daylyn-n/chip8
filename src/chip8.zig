@@ -265,7 +265,9 @@ pub fn Execute(self: *Chip8, inst: Instructions) ExecuteError!void {
         0x8 => {
             Arithmetic(self, inst);
         },
-        0x9 => {},
+        0x9 => {
+            if (inst.N == 0 and self.V[inst.X] != self.V[inst.Y]) self.pc += 2;
+        },
         0xA => {
             self.I = inst.NNN;
         },
