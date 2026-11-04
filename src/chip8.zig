@@ -242,9 +242,19 @@ pub fn Execute(self: *Chip8, inst: Instructions) ExecuteError!void {
             try push(self, self.pc);
             self.pc = inst.NNN;
         },
-        0x3 => {},
-        0x4 => {},
-        0x5 => {},
+        // 3XNN: skip if VX == NN
+        0x3 => {
+            if (self.V[inst.X] == inst.NN) self.pc += 2;
+        },
+        // 4XNN: skip if VX != NN
+        0x4 => {
+            if (self.V[inst.X] != inst.NN) self.pc += 2;
+        },
+        // 5XY0: skip if VX == VY. The last nibble must be 0; 5XY1 to 5XYF
+        // do not exist, so they do nothing.
+        0x5 => {
+            if (inst.N == 0 and self.V[inst.X] == self.V[inst.Y]) self.pc += 2;
+        },
         0x6 => {
             self.V[inst.X] = inst.NN;
         },
@@ -474,4 +484,37 @@ test "stack overflow and underflow are errors" {
     for (0..16) |_| try Execute(&c, Decode(0x2400));
     try std.testing.expectError(error.StackOverflow, Execute(&c, Decode(0x2400)));
     try std.testing.expectEqual(@as(u8, 16), c.stack_ptr);
+}
+
+// Helper for the skip tests: run one instruction from 0x200 and return the new pc.
+fn runSkip(c: *Chip8, raw: u16) !u16 {
+    c.pc = 0x200;
+    c.memory[0x200] = @truncate(raw >> 8);
+    c.memory[0x201] = @truncate(raw);
+    try Execute(c, Fetch(c));
+    return c.pc;
+}
+
+test "3XNN skips if VX == NN" {
+    var c = Chip8Init();
+    c.V[3] = 0x42;
+    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0x3342)); // equal: skip
+    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x3341)); // not equal
+}
+
+test "4XNN skips if VX != NN" {
+    var c = Chip8Init();
+    c.V[3] = 0x42;
+    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x4342)); // equal
+    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0x4341)); // not equal: skip
+}
+
+test "5XY0 skips if VX == VY" {
+    var c = Chip8Init();
+    c.V[1] = 7;
+    c.V[2] = 7;
+    c.V[3] = 8;
+    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0x5120)); // equal: skip
+    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x5130)); // not equal
+    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x5121)); // invalid last nibble
 }
