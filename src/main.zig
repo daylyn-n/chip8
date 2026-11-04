@@ -5,14 +5,18 @@ test {
 }
 const chip = @import("chip8.zig");
 
-// The IBM ROM ends with a jump to itself, so stop after a fixed number of
-// instructions and print the screen once.
-const max_cycles = 200;
+// Test ROMs end in an endless loop, so stop after a fixed number of
+// instructions and print the screen once. 50000 is enough for the
+// Timendus tests and takes only milliseconds.
+const max_cycles = 50_000;
+
+// About 700 instructions per second / 60 timer ticks per second = ~11.
+const cycles_per_tick = 11;
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 2) {
-        std.debug.print("usage: {s} <rom path>\n", .{args[0]});
+        std.debug.print("usage: {s} <rom path> [test platform]\n", .{args[0]});
         return;
     }
     const rom_path = args[1];
@@ -27,11 +31,21 @@ pub fn main(init: std.process.Init) !void {
     var c = chip.Chip8Init();
     try chip.LoadRom(&c, rom);
 
+    // Optional: Timendus test ROMs read address 0x1FF to choose a platform
+    // and skip their key menu (1 = CHIP-8). Remove when SDL input works.
+    if (args.len >= 3) {
+        c.memory[0x1FF] = std.fmt.parseInt(u8, args[2], 10) catch {
+            std.debug.print("test platform must be a number, got '{s}'\n", .{args[2]});
+            return error.InvalidArgument;
+        };
+    }
+
     var cycles: usize = 0;
     while (c.state == .RUNNING) {
         const inst = chip.Fetch(&c);
         try chip.Execute(&c, inst);
         cycles += 1;
+        if (cycles % cycles_per_tick == 0) chip.tickTimers(&c);
         if (cycles >= max_cycles) c.state = .QUIT;
     }
 

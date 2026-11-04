@@ -22,6 +22,13 @@ pub const Chip8 = struct {
     display: [64 * 32]bool = @splat(false),
     state: State = .RUNNING,
     quirks: Quirks = .{},
+    // Both timers count down by 1, 60 times per second (see tickTimers).
+    delay_timer: u8 = 0,
+    sound_timer: u8 = 0, // the buzzer is on while this is above 0
+    // keys[k] is true while hex key k (0x0 to 0xF) is down. Set by the platform.
+    keys: [16]bool = @splat(false),
+    // FX0A: the key that went down while waiting. null = no key seen yet.
+    wait_key: ?u4 = null,
     // Pseudo-random generator for CXNN. Pure math, no OS or hardware, so it
     // works on any platform. The fixed default seed makes runs repeatable;
     // each platform should call seedRandom() once at startup.
@@ -37,6 +44,11 @@ pub const Quirks = struct {
     shift_uses_vy: bool = true,
     // 8XY1 / 8XY2 / 8XY3: true = also set VF to 0 (original).
     logic_resets_vf: bool = true,
+    // FX55 / FX65: true = I ends at I + X + 1 (original). false = I unchanged.
+    memory_increments_i: bool = true,
+    // BNNN: false = jump to NNN + V0 (original).
+    // true = BXNN jumps to XNN + VX (CHIP-48 / SUPER-CHIP).
+    jump_uses_vx: bool = false,
 };
 
 pub const Instructions = struct {
@@ -85,10 +97,35 @@ pub fn Chip8Init() Chip8 {
     };
 
     for (fonts, 0..) |byte, idx| {
-        c.memory[0x050 + idx] = byte;
+        c.memory[font_start + idx] = byte;
     }
 
     return c;
+}
+
+pub const font_start = 0x050; // 16 digits, 5 bytes each
+
+// Memory addresses wrap at 4 KB, so a bad I can never index past the end.
+fn wrapAddr(a: usize) usize {
+    return a & 0xFFF;
+}
+
+// --- Platform interface: the frontend (SDL, STM32, ...) calls these. ---
+
+// Call when hex key 0x0 to 0xF goes down or up.
+pub fn setKey(self: *Chip8, key: u4, down: bool) void {
+    self.keys[key] = down;
+}
+
+// Call 60 times per second, separate from the instruction speed.
+pub fn tickTimers(self: *Chip8) void {
+    if (self.delay_timer > 0) self.delay_timer -= 1;
+    if (self.sound_timer > 0) self.sound_timer -= 1;
+}
+
+// True while the buzzer must sound.
+pub fn soundOn(self: *const Chip8) bool {
+    return self.sound_timer > 0;
 }
 
 pub const default_seed: u64 = 0xC8C8_C8C8;
@@ -157,7 +194,7 @@ pub fn Draw(self: *Chip8, inst: Instructions) void {
         const screen_y = y + row;
         if (screen_y >= height) break;
 
-        const sprite_byte = self.memory[self.I + row];
+        const sprite_byte = self.memory[wrapAddr(self.I + row)];
 
         for (0..8) |col| {
             const screen_x = x + col;
@@ -233,6 +270,70 @@ pub fn Arithmetic(self: *Chip8, inst: Instructions) void {
     }
 }
 
+// FX__: timers, keys, I, and memory. NN selects the operation.
+pub fn Misc(self: *Chip8, inst: Instructions) void {
+    const x = inst.X;
+    switch (inst.NN) {
+        // FX07: VX = delay timer
+        0x07 => self.V[x] = self.delay_timer,
+        // FX15: delay timer = VX
+        0x15 => self.delay_timer = self.V[x],
+        // FX18: sound timer = VX
+        0x18 => self.sound_timer = self.V[x],
+
+        // FX0A: wait for a key press, then store the key in VX.
+        // Like the original, the key counts when it is RELEASED.
+        // While waiting, pc goes back 2 so this instruction runs again.
+        // The timers keep running while the program waits.
+        0x0A => {
+            if (self.wait_key) |k| {
+                if (!self.keys[k]) {
+                    self.V[x] = k;
+                    self.wait_key = null;
+                    return;
+                }
+            } else {
+                for (self.keys, 0..) |down, k| {
+                    if (down) {
+                        self.wait_key = @intCast(k);
+                        break;
+                    }
+                }
+            }
+            self.pc -= 2;
+        },
+
+        // FX1E: I = I + VX
+        0x1E => self.I = @intCast(wrapAddr(@as(usize, self.I) + self.V[x])),
+
+        // FX29: I = address of the font for the digit in VX (low nibble)
+        0x29 => self.I = font_start + @as(u16, self.V[x] & 0xF) * 5,
+
+        // FX33: store the decimal digits of VX at I, I+1, I+2.
+        // Example: 156 -> 1, 5, 6.
+        0x33 => {
+            const v = self.V[x];
+            self.memory[wrapAddr(self.I)] = v / 100;
+            self.memory[wrapAddr(self.I + 1)] = (v / 10) % 10;
+            self.memory[wrapAddr(self.I + 2)] = v % 10;
+        },
+
+        // FX55: store V0 to VX (inclusive) in memory, from I
+        0x55 => {
+            for (0..@as(usize, x) + 1) |r| self.memory[wrapAddr(self.I + r)] = self.V[r];
+            if (self.quirks.memory_increments_i) self.I = @intCast(wrapAddr(@as(usize, self.I) + x + 1));
+        },
+
+        // FX65: load V0 to VX (inclusive) from memory, from I
+        0x65 => {
+            for (0..@as(usize, x) + 1) |r| self.V[r] = self.memory[wrapAddr(self.I + r)];
+            if (self.quirks.memory_increments_i) self.I = @intCast(wrapAddr(@as(usize, self.I) + x + 1));
+        },
+
+        else => {},
+    }
+}
+
 pub const ExecuteError = StackError;
 
 pub fn Execute(self: *Chip8, inst: Instructions) ExecuteError!void {
@@ -285,8 +386,10 @@ pub fn Execute(self: *Chip8, inst: Instructions) ExecuteError!void {
             self.I = inst.NNN;
         },
         0xB => {
-            // jumps to reg NNN + V[0]
-            self.pc = inst.NNN + self.V[0];
+            // BNNN: jump to NNN + V0. Widen to u16 first: NNN is a u12, so
+            // NNN + V0 could overflow. Wrap the result to stay inside memory.
+            const offset: u16 = if (self.quirks.jump_uses_vx) self.V[inst.X] else self.V[0];
+            self.pc = (@as(u16, inst.NNN) + offset) & 0xFFF;
         },
         // CXNN: VX = random byte AND NN. NN is a mask that limits the range.
         0xC => {
@@ -295,8 +398,18 @@ pub fn Execute(self: *Chip8, inst: Instructions) ExecuteError!void {
         0xD => {
             Draw(self, inst);
         },
-        0xE => {},
-        0xF => {},
+        0xE => switch (inst.NN) {
+            // EX9E: skip if the key in VX is down
+            0x9E => {
+                if (self.keys[self.V[inst.X] & 0xF]) self.pc += 2;
+            },
+            // EXA1: skip if the key in VX is up
+            0xA1 => {
+                if (!self.keys[self.V[inst.X] & 0xF]) self.pc += 2;
+            },
+            else => {},
+        },
+        0xF => Misc(self, inst),
     }
 }
 
@@ -575,4 +688,127 @@ test "CXNN gives more than one value" {
         }
     }
     try std.testing.expect(count > 10);
+}
+
+test "9XY0 skips if VX != VY" {
+    var c = Chip8Init();
+    c.V[1] = 7;
+    c.V[2] = 7;
+    c.V[3] = 8;
+    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x9120)); // equal
+    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0x9130)); // not equal: skip
+}
+
+test "BNNN jumps to NNN + V0, with no overflow" {
+    var c = Chip8Init();
+    c.V[0] = 0x10;
+    try Execute(&c, Decode(0xB300));
+    try std.testing.expectEqual(@as(u16, 0x310), c.pc);
+
+    c.V[0] = 0xFF;
+    try Execute(&c, Decode(0xBFFF)); // 0xFFF + 0xFF must not panic
+    try std.testing.expectEqual(@as(u16, (0xFFF + 0xFF) & 0xFFF), c.pc);
+}
+
+test "BXNN uses VX with the quirk on" {
+    var c = Chip8Init();
+    c.quirks.jump_uses_vx = true;
+    c.V[0] = 0x99;
+    c.V[3] = 0x10;
+    try Execute(&c, Decode(0xB300));
+    try std.testing.expectEqual(@as(u16, 0x310), c.pc);
+}
+
+test "EX9E / EXA1 skip on key state" {
+    var c = Chip8Init();
+    c.V[2] = 0xA;
+    setKey(&c, 0xA, true);
+    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0xE29E)); // down: skip
+    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0xE2A1));
+
+    setKey(&c, 0xA, false);
+    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0xE29E));
+    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0xE2A1)); // up: skip
+}
+
+test "FX07 / FX15 / FX18 and tickTimers" {
+    var c = Chip8Init();
+    c.V[1] = 2;
+    try Execute(&c, Decode(0xF115)); // delay = 2
+    try Execute(&c, Decode(0xF118)); // sound = 2
+    try std.testing.expect(soundOn(&c));
+
+    tickTimers(&c);
+    try Execute(&c, Decode(0xF207)); // V2 = delay
+    try std.testing.expectEqual(@as(u8, 1), c.V[2]);
+
+    tickTimers(&c);
+    tickTimers(&c); // must stop at 0, not wrap to 255
+    try std.testing.expectEqual(@as(u8, 0), c.delay_timer);
+    try std.testing.expect(!soundOn(&c));
+}
+
+test "FX0A waits for a key press and release" {
+    var c = Chip8Init();
+    try LoadRom(&c, &.{ 0xF3, 0x0A }); // wait for key -> V3
+
+    try Execute(&c, Fetch(&c)); // no key: repeat
+    try std.testing.expectEqual(@as(u16, 0x200), c.pc);
+
+    setKey(&c, 0x7, true);
+    try Execute(&c, Fetch(&c)); // key down: still waiting for release
+    try std.testing.expectEqual(@as(u16, 0x200), c.pc);
+
+    setKey(&c, 0x7, false);
+    try Execute(&c, Fetch(&c)); // released: done
+    try std.testing.expectEqual(@as(u16, 0x202), c.pc);
+    try std.testing.expectEqual(@as(u8, 0x7), c.V[3]);
+}
+
+test "FX1E adds VX to I" {
+    var c = Chip8Init();
+    c.I = 0x300;
+    c.V[4] = 0x20;
+    try Execute(&c, Decode(0xF41E));
+    try std.testing.expectEqual(@as(u16, 0x320), c.I);
+}
+
+test "FX29 points I at the font digit" {
+    var c = Chip8Init();
+    c.V[5] = 0xA;
+    try Execute(&c, Decode(0xF529));
+    try std.testing.expectEqual(@as(u16, 0x050 + 0xA * 5), c.I);
+}
+
+test "FX33 stores decimal digits" {
+    var c = Chip8Init();
+    c.I = 0x300;
+    c.V[6] = 156;
+    try Execute(&c, Decode(0xF633));
+    try std.testing.expectEqualSlices(u8, &.{ 1, 5, 6 }, c.memory[0x300..0x303]);
+}
+
+test "FX55 / FX65 store and load V0..VX" {
+    var c = Chip8Init();
+    c.I = 0x300;
+    c.V[0] = 11;
+    c.V[1] = 22;
+    c.V[2] = 33;
+    c.V[3] = 44; // not stored: X is 2
+    try Execute(&c, Decode(0xF255));
+    try std.testing.expectEqualSlices(u8, &.{ 11, 22, 33, 0 }, c.memory[0x300..0x304]);
+    try std.testing.expectEqual(@as(u16, 0x303), c.I); // original quirk: I + X + 1
+
+    c.V = @splat(0);
+    c.I = 0x300;
+    try Execute(&c, Decode(0xF265));
+    try std.testing.expectEqualSlices(u8, &.{ 11, 22, 33, 0 }, c.V[0..4]);
+}
+
+test "FX55 leaves I unchanged with the quirk off" {
+    var c = Chip8Init();
+    c.quirks.memory_increments_i = false;
+    c.I = 0x300;
+    try Execute(&c, Decode(0xF255));
+    try std.testing.expectEqual(@as(u16, 0x300), c.I);
 }
