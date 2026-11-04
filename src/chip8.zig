@@ -22,6 +22,10 @@ pub const Chip8 = struct {
     display: [64 * 32]bool = @splat(false),
     state: State = .RUNNING,
     quirks: Quirks = .{},
+    // Pseudo-random generator for CXNN. Pure math, no OS or hardware, so it
+    // works on any platform. The fixed default seed makes runs repeatable;
+    // each platform should call seedRandom() once at startup.
+    rng: std.Random.DefaultPrng = .init(default_seed),
     pub const init = Chip8Init;
 };
 
@@ -85,6 +89,14 @@ pub fn Chip8Init() Chip8 {
     }
 
     return c;
+}
+
+pub const default_seed: u64 = 0xC8C8_C8C8;
+
+// Set the seed for CXNN. The platform chooses the seed source:
+// PC: OS random or the time. STM32: e.g. timer value at the first key press.
+pub fn seedRandom(self: *Chip8, seed: u64) void {
+    self.rng.seed(seed);
 }
 
 pub const rom_start = 0x200;
@@ -266,13 +278,20 @@ pub fn Execute(self: *Chip8, inst: Instructions) ExecuteError!void {
             Arithmetic(self, inst);
         },
         0x9 => {
+            // opposite of 5XY0 skip if V[X] != V[Y]
             if (inst.N == 0 and self.V[inst.X] != self.V[inst.Y]) self.pc += 2;
         },
         0xA => {
             self.I = inst.NNN;
         },
-        0xB => {},
-        0xC => {},
+        0xB => {
+            // jumps to reg NNN + V[0]
+            self.pc = inst.NNN + self.V[0];
+        },
+        // CXNN: VX = random byte AND NN. NN is a mask that limits the range.
+        0xC => {
+            self.V[inst.X] = self.rng.random().int(u8) & inst.NN;
+        },
         0xD => {
             Draw(self, inst);
         },
@@ -519,4 +538,41 @@ test "5XY0 skips if VX == VY" {
     try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0x5120)); // equal: skip
     try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x5130)); // not equal
     try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x5121)); // invalid last nibble
+}
+
+test "CXNN masks the random byte with NN" {
+    var c = Chip8Init();
+    for (0..100) |_| {
+        try Execute(&c, Decode(0xC000));
+        try std.testing.expectEqual(@as(u8, 0), c.V[0]);
+
+        try Execute(&c, Decode(0xC10F));
+        try std.testing.expectEqual(@as(u8, 0), c.V[1] & 0xF0); // high bits always 0
+    }
+}
+
+test "CXNN gives the same numbers for the same seed" {
+    var a = Chip8Init();
+    var b = Chip8Init();
+    seedRandom(&a, 1234);
+    seedRandom(&b, 1234);
+    for (0..20) |_| {
+        try Execute(&a, Decode(0xC0FF));
+        try Execute(&b, Decode(0xC0FF));
+        try std.testing.expectEqual(a.V[0], b.V[0]);
+    }
+}
+
+test "CXNN gives more than one value" {
+    var c = Chip8Init();
+    var seen: [256]bool = @splat(false);
+    var count: usize = 0;
+    for (0..100) |_| {
+        try Execute(&c, Decode(0xC0FF));
+        if (!seen[c.V[0]]) {
+            seen[c.V[0]] = true;
+            count += 1;
+        }
+    }
+    try std.testing.expect(count > 10);
 }
