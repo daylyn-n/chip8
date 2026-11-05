@@ -22,7 +22,7 @@ pub const Chip8 = struct {
     display: [64 * 32]bool = @splat(false),
     state: State = .RUNNING,
     quirks: Quirks = .{},
-    // Both timers count down by 1, 60 times per second (see tickTimers).
+    // Both timers count down by 1, 60 times per second (see TickTimers).
     delay_timer: u8 = 0,
     sound_timer: u8 = 0, // the buzzer is on while this is above 0
     // keys[k] is true while hex key k (0x0 to 0xF) is down. Set by the platform.
@@ -103,25 +103,25 @@ pub fn Chip8Init() Chip8 {
 pub const font_start = 0x050; // 16 digits, 5 bytes each
 
 // Memory addresses wrap at 4 KB, so a bad I can never index past the end.
-fn wrapAddr(a: usize) usize {
+fn WrapAddr(a: usize) usize {
     return a & 0xFFF;
 }
 
 // --- Platform interface: the frontend (SDL, STM32, ...) calls these. ---
 
 // Call when hex key 0x0 to 0xF goes down or up.
-pub fn setKey(self: *Chip8, key: u4, down: bool) void {
+pub fn SetKey(self: *Chip8, key: u4, down: bool) void {
     self.keys[key] = down;
 }
 
 // Call 60 times per second, separate from the instruction speed.
-pub fn tickTimers(self: *Chip8) void {
+pub fn TickTimers(self: *Chip8) void {
     if (self.delay_timer > 0) self.delay_timer -= 1;
     if (self.sound_timer > 0) self.sound_timer -= 1;
 }
 
 // True while the buzzer must sound.
-pub fn soundOn(self: *const Chip8) bool {
+pub fn SoundOn(self: *const Chip8) bool {
     return self.sound_timer > 0;
 }
 
@@ -129,7 +129,7 @@ pub const default_seed: u64 = 0xC8C8_C8C8;
 
 // Set the seed for CXNN. The platform chooses the seed source:
 // PC: OS random or the time. STM32: e.g. timer value at the first key press.
-pub fn seedRandom(self: *Chip8, seed: u64) void {
+pub fn SeedRandom(self: *Chip8, seed: u64) void {
     self.rng.seed(seed);
 }
 
@@ -168,11 +168,23 @@ pub fn Decode(raw: u16) Instructions {
         .Y = @truncate(raw >> 4),
     };
 }
+// Addresses wrap at 4 KB: if pc is 0xFFF, the low byte comes from 0x000,
+// and pc + 2 wraps to 0x001. So a broken ROM can never read past memory.
 pub fn Fetch(self: *Chip8) Instructions {
-    const hi_bits: u16 = self.memory[self.pc];
-    const low_bits: u16 = self.memory[self.pc + 1];
-    self.pc += 2;
+    const hi_bits: u16 = self.memory[WrapAddr(self.pc)];
+    const low_bits: u16 = self.memory[WrapAddr(@as(usize, self.pc) + 1)];
+    self.pc = (self.pc + 2) & 0xFFF;
     return Decode((hi_bits << 8) | low_bits);
+}
+
+test "Fetch wraps at the end of memory" {
+    var c = Chip8Init();
+    c.pc = 0xFFF;
+    c.memory[0xFFF] = 0x12;
+    c.memory[0x000] = 0x34;
+    const inst = Fetch(&c);
+    try std.testing.expectEqual(@as(u16, 0x1234), inst.raw);
+    try std.testing.expectEqual(@as(u16, 0x001), c.pc);
 }
 
 // helper for the draw instructino
@@ -191,7 +203,7 @@ pub fn Draw(self: *Chip8, inst: Instructions) void {
         const screen_y = y + row;
         if (screen_y >= height) break;
 
-        const sprite_byte = self.memory[wrapAddr(self.I + row)];
+        const sprite_byte = self.memory[WrapAddr(self.I + row)];
 
         for (0..8) |col| {
             const screen_x = x + col;
@@ -301,7 +313,7 @@ pub fn Misc(self: *Chip8, inst: Instructions) void {
         },
 
         // FX1E: I = I + VX
-        0x1E => self.I = @intCast(wrapAddr(@as(usize, self.I) + self.V[x])),
+        0x1E => self.I = @intCast(WrapAddr(@as(usize, self.I) + self.V[x])),
 
         // FX29: I = address of the font for the digit in VX (low nibble)
         0x29 => self.I = font_start + @as(u16, self.V[x] & 0xF) * 5,
@@ -310,21 +322,21 @@ pub fn Misc(self: *Chip8, inst: Instructions) void {
         // Example: 156 -> 1, 5, 6.
         0x33 => {
             const v = self.V[x];
-            self.memory[wrapAddr(self.I)] = v / 100;
-            self.memory[wrapAddr(self.I + 1)] = (v / 10) % 10;
-            self.memory[wrapAddr(self.I + 2)] = v % 10;
+            self.memory[WrapAddr(self.I)] = v / 100;
+            self.memory[WrapAddr(self.I + 1)] = (v / 10) % 10;
+            self.memory[WrapAddr(self.I + 2)] = v % 10;
         },
 
         // FX55: store V0 to VX (inclusive) in memory, from I
         0x55 => {
-            for (0..@as(usize, x) + 1) |r| self.memory[wrapAddr(self.I + r)] = self.V[r];
-            if (self.quirks.memory_increments_i) self.I = @intCast(wrapAddr(@as(usize, self.I) + x + 1));
+            for (0..@as(usize, x) + 1) |r| self.memory[WrapAddr(self.I + r)] = self.V[r];
+            if (self.quirks.memory_increments_i) self.I = @intCast(WrapAddr(@as(usize, self.I) + x + 1));
         },
 
         // FX65: load V0 to VX (inclusive) from memory, from I
         0x65 => {
-            for (0..@as(usize, x) + 1) |r| self.V[r] = self.memory[wrapAddr(self.I + r)];
-            if (self.quirks.memory_increments_i) self.I = @intCast(wrapAddr(@as(usize, self.I) + x + 1));
+            for (0..@as(usize, x) + 1) |r| self.V[r] = self.memory[WrapAddr(self.I + r)];
+            if (self.quirks.memory_increments_i) self.I = @intCast(WrapAddr(@as(usize, self.I) + x + 1));
         },
 
         else => {},
@@ -483,7 +495,7 @@ test "ANNN with DXYN" {
 }
 
 // Helper for the 8XY_ tests: set V[X] and V[Y], run one instruction.
-fn run8(c: *Chip8, raw: u16, vx: u8, vy: u8) !void {
+fn Run8(c: *Chip8, raw: u16, vx: u8, vy: u8) !void {
     const inst = Decode(raw);
     c.V[inst.X] = vx;
     c.V[inst.Y] = vy;
@@ -492,7 +504,7 @@ fn run8(c: *Chip8, raw: u16, vx: u8, vy: u8) !void {
 
 test "8XY0 copies VY into VX" {
     var c = Chip8Init();
-    try run8(&c, 0x8120, 0x00, 0x42);
+    try Run8(&c, 0x8120, 0x00, 0x42);
     try std.testing.expectEqual(@as(u8, 0x42), c.V[1]);
     try std.testing.expectEqual(@as(u8, 0x42), c.V[2]);
 }
@@ -500,67 +512,67 @@ test "8XY0 copies VY into VX" {
 test "8XY1 / 8XY2 / 8XY3 logic, VF reset quirk" {
     var c = Chip8Init();
     c.V[0xF] = 5;
-    try run8(&c, 0x8121, 0b1100, 0b1010);
+    try Run8(&c, 0x8121, 0b1100, 0b1010);
     try std.testing.expectEqual(@as(u8, 0b1110), c.V[1]);
     try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
 
-    try run8(&c, 0x8122, 0b1100, 0b1010);
+    try Run8(&c, 0x8122, 0b1100, 0b1010);
     try std.testing.expectEqual(@as(u8, 0b1000), c.V[1]);
 
-    try run8(&c, 0x8123, 0b1100, 0b1010);
+    try Run8(&c, 0x8123, 0b1100, 0b1010);
     try std.testing.expectEqual(@as(u8, 0b0110), c.V[1]);
 
     // With the quirk off, VF is not touched.
     c.quirks.logic_resets_vf = false;
     c.V[0xF] = 5;
-    try run8(&c, 0x8121, 1, 2);
+    try Run8(&c, 0x8121, 1, 2);
     try std.testing.expectEqual(@as(u8, 5), c.V[0xF]);
 }
 
 test "8XY4 add with carry" {
     var c = Chip8Init();
-    try run8(&c, 0x8124, 200, 50);
+    try Run8(&c, 0x8124, 200, 50);
     try std.testing.expectEqual(@as(u8, 250), c.V[1]);
     try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
 
-    try run8(&c, 0x8124, 200, 100); // 300 wraps to 44
+    try Run8(&c, 0x8124, 200, 100); // 300 wraps to 44
     try std.testing.expectEqual(@as(u8, 44), c.V[1]);
     try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
 }
 
 test "8XY5 subtract, VF = no borrow" {
     var c = Chip8Init();
-    try run8(&c, 0x8125, 50, 20);
+    try Run8(&c, 0x8125, 50, 20);
     try std.testing.expectEqual(@as(u8, 30), c.V[1]);
     try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
 
-    try run8(&c, 0x8125, 20, 50); // -30 wraps to 226
+    try Run8(&c, 0x8125, 20, 50); // -30 wraps to 226
     try std.testing.expectEqual(@as(u8, 226), c.V[1]);
     try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
 
-    try run8(&c, 0x8125, 7, 7); // equal: no borrow
+    try Run8(&c, 0x8125, 7, 7); // equal: no borrow
     try std.testing.expectEqual(@as(u8, 0), c.V[1]);
     try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
 }
 
 test "8XY7 reverse subtract, VF = no borrow" {
     var c = Chip8Init();
-    try run8(&c, 0x8127, 20, 50);
+    try Run8(&c, 0x8127, 20, 50);
     try std.testing.expectEqual(@as(u8, 30), c.V[1]);
     try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
 
-    try run8(&c, 0x8127, 50, 20);
+    try Run8(&c, 0x8127, 50, 20);
     try std.testing.expectEqual(@as(u8, 226), c.V[1]);
     try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
 }
 
 test "8XY6 / 8XYE shifts use VY by default" {
     var c = Chip8Init();
-    try run8(&c, 0x8126, 0xFF, 0b0000_0011);
+    try Run8(&c, 0x8126, 0xFF, 0b0000_0011);
     try std.testing.expectEqual(@as(u8, 0b0000_0001), c.V[1]);
     try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
 
-    try run8(&c, 0x812E, 0x00, 0b1000_0001);
+    try Run8(&c, 0x812E, 0x00, 0b1000_0001);
     try std.testing.expectEqual(@as(u8, 0b0000_0010), c.V[1]);
     try std.testing.expectEqual(@as(u8, 1), c.V[0xF]);
 }
@@ -568,18 +580,18 @@ test "8XY6 / 8XYE shifts use VY by default" {
 test "8XY6 / 8XYE shift VX in place with the quirk off" {
     var c = Chip8Init();
     c.quirks.shift_uses_vy = false;
-    try run8(&c, 0x8126, 0b0000_0100, 0xFF);
+    try Run8(&c, 0x8126, 0b0000_0100, 0xFF);
     try std.testing.expectEqual(@as(u8, 0b0000_0010), c.V[1]);
     try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
 
-    try run8(&c, 0x812E, 0b0100_0000, 0xFF);
+    try Run8(&c, 0x812E, 0b0100_0000, 0xFF);
     try std.testing.expectEqual(@as(u8, 0b1000_0000), c.V[1]);
     try std.testing.expectEqual(@as(u8, 0), c.V[0xF]);
 }
 
 test "8XY_ writes VF last when X is F" {
     var c = Chip8Init();
-    try run8(&c, 0x8F14, 200, 100); // VF = VF + V1, carry
+    try Run8(&c, 0x8F14, 200, 100); // VF = VF + V1, carry
     try std.testing.expectEqual(@as(u8, 1), c.V[0xF]); // flag, not the sum 44
 }
 
@@ -618,7 +630,7 @@ test "stack overflow and underflow are errors" {
 }
 
 // Helper for the skip tests: run one instruction from 0x200 and return the new pc.
-fn runSkip(c: *Chip8, raw: u16) !u16 {
+fn RunSkip(c: *Chip8, raw: u16) !u16 {
     c.pc = 0x200;
     c.memory[0x200] = @truncate(raw >> 8);
     c.memory[0x201] = @truncate(raw);
@@ -629,15 +641,15 @@ fn runSkip(c: *Chip8, raw: u16) !u16 {
 test "3XNN skips if VX == NN" {
     var c = Chip8Init();
     c.V[3] = 0x42;
-    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0x3342)); // equal: skip
-    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x3341)); // not equal
+    try std.testing.expectEqual(@as(u16, 0x204), try RunSkip(&c, 0x3342)); // equal: skip
+    try std.testing.expectEqual(@as(u16, 0x202), try RunSkip(&c, 0x3341)); // not equal
 }
 
 test "4XNN skips if VX != NN" {
     var c = Chip8Init();
     c.V[3] = 0x42;
-    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x4342)); // equal
-    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0x4341)); // not equal: skip
+    try std.testing.expectEqual(@as(u16, 0x202), try RunSkip(&c, 0x4342)); // equal
+    try std.testing.expectEqual(@as(u16, 0x204), try RunSkip(&c, 0x4341)); // not equal: skip
 }
 
 test "5XY0 skips if VX == VY" {
@@ -645,9 +657,9 @@ test "5XY0 skips if VX == VY" {
     c.V[1] = 7;
     c.V[2] = 7;
     c.V[3] = 8;
-    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0x5120)); // equal: skip
-    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x5130)); // not equal
-    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x5121)); // invalid last nibble
+    try std.testing.expectEqual(@as(u16, 0x204), try RunSkip(&c, 0x5120)); // equal: skip
+    try std.testing.expectEqual(@as(u16, 0x202), try RunSkip(&c, 0x5130)); // not equal
+    try std.testing.expectEqual(@as(u16, 0x202), try RunSkip(&c, 0x5121)); // invalid last nibble
 }
 
 test "CXNN masks the random byte with NN" {
@@ -664,8 +676,8 @@ test "CXNN masks the random byte with NN" {
 test "CXNN gives the same numbers for the same seed" {
     var a = Chip8Init();
     var b = Chip8Init();
-    seedRandom(&a, 1234);
-    seedRandom(&b, 1234);
+    SeedRandom(&a, 1234);
+    SeedRandom(&b, 1234);
     for (0..20) |_| {
         try Execute(&a, Decode(0xC0FF));
         try Execute(&b, Decode(0xC0FF));
@@ -692,8 +704,8 @@ test "9XY0 skips if VX != VY" {
     c.V[1] = 7;
     c.V[2] = 7;
     c.V[3] = 8;
-    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0x9120)); // equal
-    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0x9130)); // not equal: skip
+    try std.testing.expectEqual(@as(u16, 0x202), try RunSkip(&c, 0x9120)); // equal
+    try std.testing.expectEqual(@as(u16, 0x204), try RunSkip(&c, 0x9130)); // not equal: skip
 }
 
 test "BNNN jumps to NNN + V0, with no overflow" {
@@ -719,30 +731,30 @@ test "BXNN uses VX with the quirk on" {
 test "EX9E / EXA1 skip on key state" {
     var c = Chip8Init();
     c.V[2] = 0xA;
-    setKey(&c, 0xA, true);
-    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0xE29E)); // down: skip
-    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0xE2A1));
+    SetKey(&c, 0xA, true);
+    try std.testing.expectEqual(@as(u16, 0x204), try RunSkip(&c, 0xE29E)); // down: skip
+    try std.testing.expectEqual(@as(u16, 0x202), try RunSkip(&c, 0xE2A1));
 
-    setKey(&c, 0xA, false);
-    try std.testing.expectEqual(@as(u16, 0x202), try runSkip(&c, 0xE29E));
-    try std.testing.expectEqual(@as(u16, 0x204), try runSkip(&c, 0xE2A1)); // up: skip
+    SetKey(&c, 0xA, false);
+    try std.testing.expectEqual(@as(u16, 0x202), try RunSkip(&c, 0xE29E));
+    try std.testing.expectEqual(@as(u16, 0x204), try RunSkip(&c, 0xE2A1)); // up: skip
 }
 
-test "FX07 / FX15 / FX18 and tickTimers" {
+test "FX07 / FX15 / FX18 and TickTimers" {
     var c = Chip8Init();
     c.V[1] = 2;
     try Execute(&c, Decode(0xF115)); // delay = 2
     try Execute(&c, Decode(0xF118)); // sound = 2
-    try std.testing.expect(soundOn(&c));
+    try std.testing.expect(SoundOn(&c));
 
-    tickTimers(&c);
+    TickTimers(&c);
     try Execute(&c, Decode(0xF207)); // V2 = delay
     try std.testing.expectEqual(@as(u8, 1), c.V[2]);
 
-    tickTimers(&c);
-    tickTimers(&c); // must stop at 0, not wrap to 255
+    TickTimers(&c);
+    TickTimers(&c); // must stop at 0, not wrap to 255
     try std.testing.expectEqual(@as(u8, 0), c.delay_timer);
-    try std.testing.expect(!soundOn(&c));
+    try std.testing.expect(!SoundOn(&c));
 }
 
 test "FX0A waits for a key press and release" {
@@ -752,11 +764,11 @@ test "FX0A waits for a key press and release" {
     try Execute(&c, Fetch(&c)); // no key: repeat
     try std.testing.expectEqual(@as(u16, 0x200), c.pc);
 
-    setKey(&c, 0x7, true);
+    SetKey(&c, 0x7, true);
     try Execute(&c, Fetch(&c)); // key down: still waiting for release
     try std.testing.expectEqual(@as(u16, 0x200), c.pc);
 
-    setKey(&c, 0x7, false);
+    SetKey(&c, 0x7, false);
     try Execute(&c, Fetch(&c)); // released: done
     try std.testing.expectEqual(@as(u16, 0x202), c.pc);
     try std.testing.expectEqual(@as(u8, 0x7), c.V[3]);

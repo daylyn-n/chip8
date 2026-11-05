@@ -1,4 +1,4 @@
-// SDL3 frontend: window and drawing (later keys and sound).
+// SDL3 frontend: window, drawing, keys, and sound.
 // All SDL code stays in this file. chip8.zig never imports SDL.
 const std = @import("std");
 const c = @import("sdl");
@@ -17,19 +17,32 @@ pub const height = display_height * scale;
 const color_on: u32 = 0xFFFFFFFF; // white
 const color_off: u32 = 0xFF000000; // black
 
+// Beep sound: a square wave. A square wave is a tone that jumps between
+// +volume and -volume. It sounds like an old computer beep.
+const sample_rate = 48000; // samples per second
+const beep_freq = 440; // Hz (the note A4)
+const beep_volume: f32 = 0.1; // 0.0 to 1.0. Square waves are loud.
+// Keep about 2 frames of sound queued. Less can stutter; more adds delay.
+const queue_target_samples = sample_rate / 60 * 2;
+
 pub const Error = error{ SdlInit, SdlWindow, SdlRenderer, SdlTexture };
 
 pub const Frontend = struct {
     window: *c.SDL_Window,
     renderer: *c.SDL_Renderer,
-    // A 64x32 image in graphics memory. draw() copies the display into it,
+    // A 64x32 image in graphics memory. Draw() copies the display into it,
     // and the renderer stretches it to fill the window.
     texture: *c.SDL_Texture,
-    // One u32 color per CHIP-8 pixel. draw() fills it, then sends it to the texture.
+    // One u32 color per CHIP-8 pixel. Draw() fills it, then sends it to the texture.
     pixels: [display_width * display_height]u32 = @splat(color_off),
+    // null if no audio device opened. The emulator then runs without sound.
+    audio: ?*c.SDL_AudioStream = null,
+    // Position inside one wave, 0.0 to 1.0. Kept between frames so the
+    // wave does not jump, because a jump makes a click.
+    phase: f32 = 0,
 
-    pub fn init(title: [:0]const u8) Error!Frontend {
-        if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
+    pub fn Init(title: [:0]const u8) Error!Frontend {
+        if (!c.SDL_Init(c.SDL_INIT_VIDEO | c.SDL_INIT_AUDIO)) {
             std.debug.print("SDL_Init failed: {s}\n", .{c.SDL_GetError()});
             return error.SdlInit;
         }
@@ -62,10 +75,21 @@ pub const Frontend = struct {
         // NEAREST keeps the pixels sharp. The default blurs them when stretched.
         _ = c.SDL_SetTextureScaleMode(texture, c.SDL_SCALEMODE_NEAREST);
 
-        return .{ .window = window, .renderer = renderer, .texture = texture };
+        // Sound is optional: if it fails, print a warning and continue.
+        const spec: c.SDL_AudioSpec = .{ .format = c.SDL_AUDIO_F32, .channels = 1, .freq = sample_rate };
+        const audio = c.SDL_OpenAudioDeviceStream(c.SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, null, null);
+        if (audio) |stream| {
+            // The device starts paused. It plays silence while the queue is empty.
+            _ = c.SDL_ResumeAudioStreamDevice(stream);
+        } else {
+            std.debug.print("no sound: SDL_OpenAudioDeviceStream failed: {s}\n", .{c.SDL_GetError()});
+        }
+
+        return .{ .window = window, .renderer = renderer, .texture = texture, .audio = audio };
     }
 
-    pub fn deinit(self: *Frontend) void {
+    pub fn Deinit(self: *Frontend) void {
+        if (self.audio) |stream| c.SDL_DestroyAudioStream(stream);
         c.SDL_DestroyTexture(self.texture);
         c.SDL_DestroyRenderer(self.renderer);
         c.SDL_DestroyWindow(self.window);
@@ -74,7 +98,7 @@ pub const Frontend = struct {
 
     // Show the CHIP-8 display in the window. Takes only the pixel array,
     // so this file does not depend on the Chip8 struct.
-    pub fn draw(self: *Frontend, display: *const [display_width * display_height]bool) void {
+    pub fn Draw(self: *Frontend, display: *const [display_width * display_height]bool) void {
         for (display, &self.pixels) |on, *px| {
             px.* = if (on) color_on else color_off;
         }
@@ -87,17 +111,39 @@ pub const Frontend = struct {
         _ = c.SDL_RenderPresent(self.renderer);
     }
 
+    // Call once per frame. While on is true, keep the beep queued.
+    // When on is false, drop the queued sound so the beep stops at once.
+    pub fn Beep(self: *Frontend, on: bool) void {
+        const stream = self.audio orelse return;
+
+        if (!on) {
+            _ = c.SDL_ClearAudioStream(stream);
+            return;
+        }
+
+        var chunk: [256]f32 = undefined;
+        const step: f32 = @as(f32, beep_freq) / sample_rate; // phase per sample
+        while (@divTrunc(c.SDL_GetAudioStreamQueued(stream), @sizeOf(f32)) < queue_target_samples) {
+            for (&chunk) |*sample| {
+                sample.* = if (self.phase < 0.5) beep_volume else -beep_volume;
+                self.phase += step;
+                if (self.phase >= 1.0) self.phase -= 1.0;
+            }
+            if (!c.SDL_PutAudioStreamData(stream, &chunk, @sizeOf(@TypeOf(chunk)))) break;
+        }
+    }
+
     // Sleep about one frame (60 per second). A simple delay for now;
     // exact timing comes later.
-    pub fn waitFrame(self: *Frontend) void {
+    pub fn WaitFrame(self: *Frontend) void {
         _ = self;
         c.SDL_Delay(1000 / 60);
     }
 
     // Handle all waiting events. Returns false when the user closes the window.
-    // Key events update the machine's keys with chip.setKey.
+    // Key events update the machine's keys with chip.SetKey.
     // Escape also closes the emulator.
-    pub fn pollEvents(self: *Frontend, machine: *chip.Chip8) bool {
+    pub fn PollEvents(self: *Frontend, machine: *chip.Chip8) bool {
         _ = self;
         var event: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&event)) {
@@ -109,7 +155,7 @@ pub const Frontend = struct {
                     // Holding a key sends repeat KEY_DOWN events. The key is
                     // already down, so ignore them.
                     if (key.repeat) continue;
-                    if (mapKey(key.scancode)) |k| chip.setKey(machine, k, key.down);
+                    if (MapKey(key.scancode)) |k| chip.SetKey(machine, k, key.down);
                 },
                 else => {},
             }
@@ -126,7 +172,7 @@ pub const Frontend = struct {
 //   4 5 6 D            Q W E R
 //   7 8 9 E            A S D F
 //   A 0 B F            Z X C V
-fn mapKey(scancode: c.SDL_Scancode) ?u4 {
+fn MapKey(scancode: c.SDL_Scancode) ?u4 {
     return switch (scancode) {
         c.SDL_SCANCODE_1 => 0x1,
         c.SDL_SCANCODE_2 => 0x2,
@@ -148,7 +194,7 @@ fn mapKey(scancode: c.SDL_Scancode) ?u4 {
     };
 }
 
-test "mapKey covers all 16 CHIP-8 keys exactly once" {
+test "MapKey covers all 16 CHIP-8 keys exactly once" {
     var seen: [16]bool = @splat(false);
     const keys = [_]c.SDL_Scancode{
         c.SDL_SCANCODE_1, c.SDL_SCANCODE_2, c.SDL_SCANCODE_3, c.SDL_SCANCODE_4,
@@ -157,9 +203,9 @@ test "mapKey covers all 16 CHIP-8 keys exactly once" {
         c.SDL_SCANCODE_Z, c.SDL_SCANCODE_X, c.SDL_SCANCODE_C, c.SDL_SCANCODE_V,
     };
     for (keys) |sc| {
-        const k = mapKey(sc).?;
+        const k = MapKey(sc).?;
         try std.testing.expect(!seen[k]); // no key mapped twice
         seen[k] = true;
     }
-    try std.testing.expectEqual(@as(?u4, null), mapKey(c.SDL_SCANCODE_P));
+    try std.testing.expectEqual(@as(?u4, null), MapKey(c.SDL_SCANCODE_P));
 }

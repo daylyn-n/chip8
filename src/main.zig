@@ -37,29 +37,30 @@ pub fn main(init: std.process.Init) !void {
         };
     }
 
-    var frontend = try sdl_frontend.Frontend.init("CHIP-8");
-    defer frontend.deinit();
+    var frontend = try sdl_frontend.Frontend.Init("CHIP-8");
+    defer frontend.Deinit();
 
     // One pass = one frame (~60 per second).
     while (c.state == .RUNNING) {
-        if (!frontend.pollEvents(&c)) c.state = .QUIT;
+        if (!frontend.PollEvents(&c)) c.state = .QUIT;
 
         for (0..cycles_per_frame) |_| {
             try chip.Execute(&c, chip.Fetch(&c));
         }
-        chip.tickTimers(&c);
+        chip.TickTimers(&c);
 
-        frontend.draw(&c.display);
-        frontend.waitFrame();
+        frontend.Draw(&c.display);
+        frontend.Beep(chip.SoundOn(&c));
+        frontend.WaitFrame();
     }
 
     // Print the last screen after the window closes.
-    printDisplay(&c);
+    PrintDisplay(&c);
 }
 
 // Print the 64x32 display. Each pixel is 2 characters wide, because a
 // terminal character is about twice as tall as it is wide.
-fn printDisplay(c: *const chip.Chip8) void {
+fn PrintDisplay(c: *const chip.Chip8) void {
     const width = 64;
     const height = 32;
 
