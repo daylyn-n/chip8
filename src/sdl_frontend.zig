@@ -1,16 +1,30 @@
-// SDL3 frontend: window (and later drawing, keys, and sound).
+// SDL3 frontend: window and drawing (later keys and sound).
 // All SDL code stays in this file. chip8.zig never imports SDL.
 const std = @import("std");
 const c = @import("sdl");
 
-pub const scale = 10; // each CHIP-8 pixel is 10x10 screen pixels
-pub const width = 64 * scale;
-pub const height = 32 * scale;
+// CHIP-8 screen size, in CHIP-8 pixels.
+pub const display_width = 64;
+pub const display_height = 32;
 
-pub const Error = error{ SdlInit, SdlWindow };
+pub const scale = 10; // each CHIP-8 pixel is 10x10 screen pixels
+pub const width = display_width * scale;
+pub const height = display_height * scale;
+
+// Pixel colors, as 0xAARRGGBB (the alpha byte is ignored).
+const color_on: u32 = 0xFFFFFFFF; // white
+const color_off: u32 = 0xFF000000; // black
+
+pub const Error = error{ SdlInit, SdlWindow, SdlRenderer, SdlTexture };
 
 pub const Frontend = struct {
     window: *c.SDL_Window,
+    renderer: *c.SDL_Renderer,
+    // A 64x32 image in graphics memory. draw() copies the display into it,
+    // and the renderer stretches it to fill the window.
+    texture: *c.SDL_Texture,
+    // One u32 color per CHIP-8 pixel. draw() fills it, then sends it to the texture.
+    pixels: [display_width * display_height]u32 = @splat(color_off),
 
     pub fn init(title: [:0]const u8) Error!Frontend {
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
@@ -24,12 +38,51 @@ pub const Frontend = struct {
             return error.SdlWindow;
         };
 
-        return .{ .window = window };
+        errdefer c.SDL_DestroyWindow(window);
+
+        const renderer = c.SDL_CreateRenderer(window, null) orelse {
+            std.debug.print("SDL_CreateRenderer failed: {s}\n", .{c.SDL_GetError()});
+            return error.SdlRenderer;
+        };
+        errdefer c.SDL_DestroyRenderer(renderer);
+
+        // STREAMING: the texture changes every frame.
+        const texture = c.SDL_CreateTexture(
+            renderer,
+            c.SDL_PIXELFORMAT_XRGB8888,
+            c.SDL_TEXTUREACCESS_STREAMING,
+            display_width,
+            display_height,
+        ) orelse {
+            std.debug.print("SDL_CreateTexture failed: {s}\n", .{c.SDL_GetError()});
+            return error.SdlTexture;
+        };
+        // NEAREST keeps the pixels sharp. The default blurs them when stretched.
+        _ = c.SDL_SetTextureScaleMode(texture, c.SDL_SCALEMODE_NEAREST);
+
+        return .{ .window = window, .renderer = renderer, .texture = texture };
     }
 
     pub fn deinit(self: *Frontend) void {
+        c.SDL_DestroyTexture(self.texture);
+        c.SDL_DestroyRenderer(self.renderer);
         c.SDL_DestroyWindow(self.window);
         c.SDL_Quit();
+    }
+
+    // Show the CHIP-8 display in the window. Takes only the pixel array,
+    // so this file does not depend on the Chip8 struct.
+    pub fn draw(self: *Frontend, display: *const [display_width * display_height]bool) void {
+        for (display, &self.pixels) |on, *px| {
+            px.* = if (on) color_on else color_off;
+        }
+
+        // pitch = bytes in one row of pixels.
+        _ = c.SDL_UpdateTexture(self.texture, null, &self.pixels, display_width * @sizeOf(u32));
+        _ = c.SDL_RenderClear(self.renderer);
+        // null, null = the full texture, stretched to the full window.
+        _ = c.SDL_RenderTexture(self.renderer, self.texture, null, null);
+        _ = c.SDL_RenderPresent(self.renderer);
     }
 
     // Sleep about one frame (60 per second). A simple delay for now;

@@ -39,8 +39,7 @@ pub fn main(init: std.process.Init) !void {
     var frontend = try sdl_frontend.Frontend.init("CHIP-8");
     defer frontend.deinit();
 
-    // One pass = one frame (~60 per second). The window does not show the
-    // display yet, so the terminal print below is still the way to see it.
+    // One pass = one frame (~60 per second).
     while (c.state == .RUNNING) {
         if (!frontend.pollEvents()) c.state = .QUIT;
 
@@ -49,6 +48,7 @@ pub fn main(init: std.process.Init) !void {
         }
         chip.tickTimers(&c);
 
+        frontend.draw(&c.display);
         frontend.waitFrame();
     }
 
