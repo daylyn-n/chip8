@@ -4,14 +4,10 @@ test {
     _ = @import("chip8.zig");
 }
 const chip = @import("chip8.zig");
+const sdl_frontend = @import("sdl_frontend.zig");
 
-// Test ROMs end in an endless loop, so stop after a fixed number of
-// instructions and print the screen once. 50000 is enough for the
-// Timendus tests and takes only milliseconds.
-const max_cycles = 50_000;
-
-// About 700 instructions per second / 60 timer ticks per second = ~11.
-const cycles_per_tick = 11;
+// About 700 instructions per second / 60 frames per second = ~11.
+const cycles_per_frame = 11;
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -40,15 +36,23 @@ pub fn main(init: std.process.Init) !void {
         };
     }
 
-    var cycles: usize = 0;
+    var frontend = try sdl_frontend.Frontend.init("CHIP-8");
+    defer frontend.deinit();
+
+    // One pass = one frame (~60 per second). The window does not show the
+    // display yet, so the terminal print below is still the way to see it.
     while (c.state == .RUNNING) {
-        const inst = chip.Fetch(&c);
-        try chip.Execute(&c, inst);
-        cycles += 1;
-        if (cycles % cycles_per_tick == 0) chip.tickTimers(&c);
-        if (cycles >= max_cycles) c.state = .QUIT;
+        if (!frontend.pollEvents()) c.state = .QUIT;
+
+        for (0..cycles_per_frame) |_| {
+            try chip.Execute(&c, chip.Fetch(&c));
+        }
+        chip.tickTimers(&c);
+
+        frontend.waitFrame();
     }
 
+    // Print the last screen after the window closes.
     printDisplay(&c);
 }
 

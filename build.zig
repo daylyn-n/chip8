@@ -4,6 +4,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // SDL3: translate the C header into a Zig module named "sdl".
+    // pkg-config finds the SDL3 include path (install SDL3-devel).
+    const sdl = b.addTranslateC(.{
+        .root_source_file = b.path("src/sdl.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    sdl.linkSystemLibrary("SDL3", .{});
+
     const exe = b.addExecutable(.{
         .name = "chip8",
         .root_module = b.createModule(.{
@@ -12,6 +21,9 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+    exe.root_module.addImport("sdl", sdl.createModule());
+    exe.root_module.linkSystemLibrary("SDL3", .{});
+    exe.root_module.link_libc = true;
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
