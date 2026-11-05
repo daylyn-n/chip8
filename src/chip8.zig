@@ -108,7 +108,11 @@ fn WrapAddr(a: usize) usize {
 }
 
 // --- Platform interface: the frontend (SDL, STM32, ...) calls these. ---
-
+// CHIP-8 keypad      Keyboard
+// 1 2 3 C            1 2 3 4
+// 4 5 6 D            Q W E R
+// 7 8 9 E            A S D F
+// A 0 B F            Z X C V/
 // Call when hex key 0x0 to 0xF goes down or up.
 pub fn SetKey(self: *Chip8, key: u4, down: bool) void {
     self.keys[key] = down;

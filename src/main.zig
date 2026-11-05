@@ -13,7 +13,7 @@ const cycles_per_frame = 11;
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len < 2) {
-        std.debug.print("usage: {s} <rom path> [test platform]\n", .{args[0]});
+        std.debug.print("usage: {s} <rom path>\n", .{args[0]});
         return;
     }
     const rom_path = args[1];
@@ -28,14 +28,11 @@ pub fn main(init: std.process.Init) !void {
     var c = chip.Chip8Init();
     try chip.LoadRom(&c, rom);
 
-    // Optional: Timendus test ROMs read address 0x1FF to choose a platform
-    // and skip their key menu (1 = CHIP-8). Remove when SDL input works.
-    if (args.len >= 3) {
-        c.memory[0x1FF] = std.fmt.parseInt(u8, args[2], 10) catch {
-            std.debug.print("test platform must be a number, got '{s}'\n", .{args[2]});
-            return error.InvalidArgument;
-        };
-    }
+    // Seed CXNN from the operating system's random source, so each run
+    // gives different numbers.
+    var seed_bytes: [8]u8 = undefined;
+    init.io.random(&seed_bytes);
+    chip.SeedRandom(&c, std.mem.readInt(u64, &seed_bytes, .little));
 
     var frontend = try sdl_frontend.Frontend.Init("CHIP-8");
     defer frontend.Deinit();
@@ -52,25 +49,5 @@ pub fn main(init: std.process.Init) !void {
         frontend.Draw(&c.display);
         frontend.Beep(chip.SoundOn(&c));
         frontend.WaitFrame();
-    }
-
-    // Print the last screen after the window closes.
-    PrintDisplay(&c);
-}
-
-// Print the 64x32 display. Each pixel is 2 characters wide, because a
-// terminal character is about twice as tall as it is wide.
-fn PrintDisplay(c: *const chip.Chip8) void {
-    const width = 64;
-    const height = 32;
-
-    for (0..height) |row| {
-        var line: [width * 2]u8 = undefined;
-        for (0..width) |col| {
-            const ch: u8 = if (c.display[row * width + col]) '#' else ' ';
-            line[col * 2] = ch;
-            line[col * 2 + 1] = ch;
-        }
-        std.debug.print("{s}\n", .{&line});
     }
 }
