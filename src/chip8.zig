@@ -29,9 +29,6 @@ pub const Chip8 = struct {
     keys: [16]bool = @splat(false),
     // FX0A: the key that went down while waiting. null = no key seen yet.
     wait_key: ?u4 = null,
-    // Pseudo-random generator for CXNN. Pure math, no OS or hardware, so it
-    // works on any platform. The fixed default seed makes runs repeatable;
-    // each platform should call seedRandom() once at startup.
     rng: std.Random.DefaultPrng = .init(default_seed),
     pub const init = Chip8Init;
 };

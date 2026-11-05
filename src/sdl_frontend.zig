@@ -2,6 +2,8 @@
 // All SDL code stays in this file. chip8.zig never imports SDL.
 const std = @import("std");
 const c = @import("sdl");
+// The frontend may use the core; the core never uses the frontend.
+const chip = @import("chip8.zig");
 
 // CHIP-8 screen size, in CHIP-8 pixels.
 pub const display_width = 64;
@@ -93,12 +95,71 @@ pub const Frontend = struct {
     }
 
     // Handle all waiting events. Returns false when the user closes the window.
-    pub fn pollEvents(self: *Frontend) bool {
+    // Key events update the machine's keys with chip.setKey.
+    // Escape also closes the emulator.
+    pub fn pollEvents(self: *Frontend, machine: *chip.Chip8) bool {
         _ = self;
         var event: c.SDL_Event = undefined;
         while (c.SDL_PollEvent(&event)) {
-            if (event.type == c.SDL_EVENT_QUIT) return false;
+            switch (event.type) {
+                c.SDL_EVENT_QUIT => return false,
+                c.SDL_EVENT_KEY_DOWN, c.SDL_EVENT_KEY_UP => {
+                    const key = event.key;
+                    if (key.scancode == c.SDL_SCANCODE_ESCAPE) return false;
+                    // Holding a key sends repeat KEY_DOWN events. The key is
+                    // already down, so ignore them.
+                    if (key.repeat) continue;
+                    if (mapKey(key.scancode)) |k| chip.setKey(machine, k, key.down);
+                },
+                else => {},
+            }
         }
         return true;
     }
 };
+
+// Map a keyboard key to a CHIP-8 hex key. Scancodes are physical key
+// positions, so the 4x4 block is the same on QWERTY, AZERTY, and so on.
+//
+//   CHIP-8 keypad      Keyboard
+//   1 2 3 C            1 2 3 4
+//   4 5 6 D            Q W E R
+//   7 8 9 E            A S D F
+//   A 0 B F            Z X C V
+fn mapKey(scancode: c.SDL_Scancode) ?u4 {
+    return switch (scancode) {
+        c.SDL_SCANCODE_1 => 0x1,
+        c.SDL_SCANCODE_2 => 0x2,
+        c.SDL_SCANCODE_3 => 0x3,
+        c.SDL_SCANCODE_4 => 0xC,
+        c.SDL_SCANCODE_Q => 0x4,
+        c.SDL_SCANCODE_W => 0x5,
+        c.SDL_SCANCODE_E => 0x6,
+        c.SDL_SCANCODE_R => 0xD,
+        c.SDL_SCANCODE_A => 0x7,
+        c.SDL_SCANCODE_S => 0x8,
+        c.SDL_SCANCODE_D => 0x9,
+        c.SDL_SCANCODE_F => 0xE,
+        c.SDL_SCANCODE_Z => 0xA,
+        c.SDL_SCANCODE_X => 0x0,
+        c.SDL_SCANCODE_C => 0xB,
+        c.SDL_SCANCODE_V => 0xF,
+        else => null,
+    };
+}
+
+test "mapKey covers all 16 CHIP-8 keys exactly once" {
+    var seen: [16]bool = @splat(false);
+    const keys = [_]c.SDL_Scancode{
+        c.SDL_SCANCODE_1, c.SDL_SCANCODE_2, c.SDL_SCANCODE_3, c.SDL_SCANCODE_4,
+        c.SDL_SCANCODE_Q, c.SDL_SCANCODE_W, c.SDL_SCANCODE_E, c.SDL_SCANCODE_R,
+        c.SDL_SCANCODE_A, c.SDL_SCANCODE_S, c.SDL_SCANCODE_D, c.SDL_SCANCODE_F,
+        c.SDL_SCANCODE_Z, c.SDL_SCANCODE_X, c.SDL_SCANCODE_C, c.SDL_SCANCODE_V,
+    };
+    for (keys) |sc| {
+        const k = mapKey(sc).?;
+        try std.testing.expect(!seen[k]); // no key mapped twice
+        seen[k] = true;
+    }
+    try std.testing.expectEqual(@as(?u4, null), mapKey(c.SDL_SCANCODE_P));
+}
