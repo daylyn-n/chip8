@@ -15,4 +15,8 @@ I2cResult display_init(void);
 I2cResult display_command(u8 cmd);
 I2cResult display_commands(const u8 *cmds, u32 len);
 
+// TODO
+I2cResult display_clear();
+I2cResult display_set_pixel(u8 x, u8 y, bool on);
+
 #endif
