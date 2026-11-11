@@ -15,19 +15,22 @@ SECTIONS{
    * */
   .vectors  : {KEEP(*(.vectors))}   > flash
   .text     : { *(.text*)}          > flash /* compiled code global constants*/
-  .rodata   : { *(.rodata*) }       > flash /* string lits*/
+  .rodata   : { *(.rodata*) . = ALIGN(4); } > flash /* string lits*/
 
   .data : {
     . = ALIGN(4);
    _sdata = .;
    *(.data SORT(.data.*))
+   . = ALIGN(4);
    _edata = .;
   } > sram AT > flash
   _sidata = LOADADDR(.data);
 
   .bss : {
+    . = ALIGN(4);
     _sbss = .;
     *(.bss SORT(.bss.*) COMMON)
+    . = ALIGN(4);
     _ebss = .;
   } > sram
 
