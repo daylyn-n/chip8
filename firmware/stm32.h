@@ -6,6 +6,8 @@
 typedef uint32_t u32;
 typedef uint8_t u8;
 
+#define PA5 5
+
 typedef struct {
   volatile u32 CR;
   volatile u32 PLLCFGR;
@@ -19,9 +21,9 @@ typedef struct {
   volatile u32 APB2RSTR;
   volatile u32 RESERVED1[2];
   volatile u32 AHB1ENR;
-} RCC;
+} RCC_Regs;
 #define RCC_BASE 0x40023800UL
-#define RCC ((RCC *)RCC_BASE)
+#define RCC ((RCC_Regs *)RCC_BASE)
 
 typedef struct {
   volatile u32 MODER;
@@ -32,8 +34,7 @@ typedef struct {
   volatile u32 ODR;
   volatile u32 BSRR;
   volatile u32 LCKR;
-  volatile u32 AFRL;
-  volatile u32 AFRH;
+  volatile u32 AFR[2];
 } GPIO;
 #define GPIOA_BASE 0x40020000UL
 #define GPIOB_BASE 0x40020400UL

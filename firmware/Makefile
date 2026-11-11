@@ -4,7 +4,7 @@ CFLAGS ?= -W -Wall -Wextra -Werror -Wundef -Wshadow -Wdouble-promotion \
 					-mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mfloat-abi=hard $(EXTRA_CFLAGS)
 LDFLAGS ?= -Tf446re.ld -nostartfiles -nostdlib --specs nano.specs -lc -lgcc -Wl,--gc-sections -Wl,-Map=$@.map
 
-SOURCES = firmware/stm32.c firmware/uart.c firmware/i2c.c
+SOURCES = startup.c gpio.c 
 
 build: firmware.elf
 
