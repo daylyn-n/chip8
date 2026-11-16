@@ -24,8 +24,47 @@ pub fn ToOled(display: *const Display, out: *[oled_bytes]u8) void {
     }
 }
 
-export fn chip8_to_oled(display: *const Display, out: *[oled_bytes]u8) void {
-    ToOled(display, out);
+pub const cycles_per_frame = 11;
+
+pub const Status = enum(i32) {
+    ok = 0,
+    rom_too_large = 1,
+    stack_overflow = 2,
+    stack_underflow = 3,
+};
+
+var g_chip: chip.Chip8 = undefined;
+var g_shown: Display = @splat(false);
+var g_force_render = true;
+
+export fn chip8_init(rom: [*]const u8, len: u32) i32 {
+    g_chip = chip.Chip8Init();
+    g_force_render = true;
+    chip.LoadRom(&g_chip, rom[0..len]) catch return @intFromEnum(Status.rom_too_large);
+    return @intFromEnum(Status.ok);
+}
+
+export fn chip8_frame() i32 {
+    for (0..cycles_per_frame) |_| {
+        chip.Execute(&g_chip, chip.Fetch(&g_chip)) catch |err| return @intFromEnum(switch (err) {
+            error.StackOverflow => Status.stack_overflow,
+            error.StackUnderflow => Status.stack_underflow,
+        });
+    }
+    chip.TickTimers(&g_chip);
+    return @intFromEnum(Status.ok);
+}
+
+export fn chip8_render(out: *[oled_bytes]u8) bool {
+    if (!g_force_render and std.mem.eql(bool, &g_chip.display, &g_shown)) return false;
+    g_shown = g_chip.display;
+    g_force_render = false;
+    ToOled(&g_chip.display, out);
+    return true;
+}
+
+export fn chip8_sound_on() bool {
+    return chip.SoundOn(&g_chip);
 }
 
 test "ToOled: empty display gives an empty frame" {
@@ -71,4 +110,28 @@ test "ToOled: full display gives a full frame" {
     var out: [oled_bytes]u8 = undefined;
     ToOled(&display, &out);
     try std.testing.expect(std.mem.allEqual(u8, &out, 0xFF));
+}
+
+test "chip8_init rejects a ROM that is too large" {
+    const big: [chip.max_rom_size + 1]u8 = @splat(0);
+    try std.testing.expectEqual(@intFromEnum(Status.rom_too_large), chip8_init(&big, big.len));
+}
+
+test "chip8_frame reports a stack underflow" {
+    const rom = [_]u8{ 0x00, 0xEE };
+    try std.testing.expectEqual(@intFromEnum(Status.ok), chip8_init(&rom, rom.len));
+    try std.testing.expectEqual(@intFromEnum(Status.stack_underflow), chip8_frame());
+}
+
+test "chip8_render sends the first frame, then only changed frames" {
+    const rom = [_]u8{ 0x12, 0x00 };
+    try std.testing.expectEqual(@intFromEnum(Status.ok), chip8_init(&rom, rom.len));
+    var out: [oled_bytes]u8 = undefined;
+    try std.testing.expect(chip8_render(&out));
+    try std.testing.expect(std.mem.allEqual(u8, &out, 0));
+    try std.testing.expectEqual(@intFromEnum(Status.ok), chip8_frame());
+    try std.testing.expect(!chip8_render(&out));
+    g_chip.display[0] = true;
+    try std.testing.expect(chip8_render(&out));
+    try std.testing.expectEqual(@as(u8, 0x03), out[0]);
 }
