@@ -67,6 +67,14 @@ export fn chip8_sound_on() bool {
     return chip.SoundOn(&g_chip);
 }
 
+export fn chip8_set_key(key: u8, down: bool) void {
+    chip.SetKey(&g_chip, @truncate(key), down);
+}
+
+export fn chip8_seed(seed: u32) void {
+    chip.SeedRandom(&g_chip, seed);
+}
+
 test "ToOled: empty display gives an empty frame" {
     const display: Display = @splat(false);
     var out: [oled_bytes]u8 = @splat(0xAA);
@@ -134,4 +142,13 @@ test "chip8_render sends the first frame, then only changed frames" {
     g_chip.display[0] = true;
     try std.testing.expect(chip8_render(&out));
     try std.testing.expectEqual(@as(u8, 0x03), out[0]);
+}
+
+test "chip8_set_key sets and clears one key" {
+    const rom = [_]u8{ 0x12, 0x00 };
+    _ = chip8_init(&rom, rom.len);
+    chip8_set_key(0xA, true);
+    try std.testing.expect(g_chip.keys[0xA]);
+    chip8_set_key(0xA, false);
+    try std.testing.expect(!g_chip.keys[0xA]);
 }

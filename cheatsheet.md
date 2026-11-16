@@ -136,18 +136,18 @@ row 8 [SDA]  o o o o   -> D14
 
 | Keypad pin | Nucleo pin | STM32 pin | Mode                           |
 | ---------- | ---------- | --------- | ------------------------------ |
-| Row 1      | A0         | PA0       | Output, open-drain, idle high  |
-| Row 2      | A1         | PA1       | Output, open-drain, idle high  |
-| Row 3      | A2         | PA4       | Output, open-drain, idle high  |
-| Row 4      | A3         | PB0       | Output, open-drain, idle high  |
-| Column 1   | D6         | PB10      | Input, pull-up                 |
-| Column 2   | D7         | PA8       | Input, pull-up                 |
-| Column 3   | D8         | PA9       | Input, pull-up                 |
-| Column 4   | D9         | PC7       | Input, pull-up                 |
+| Column 1   | A0         | PA0       | Input, pull-up                 |
+| Column 2   | A1         | PA1       | Input, pull-up                 |
+| Column 3   | A2         | PA4       | Input, pull-up                 |
+| Column 4   | A3         | PB0       | Input, pull-up                 |
+| Row 1      | D6         | PB10      | Output, open-drain, idle high  |
+| Row 2      | D7         | PA8       | Output, open-drain, idle high  |
+| Row 3      | D8         | PA9       | Output, open-drain, idle high  |
+| Row 4      | D9         | PC7       | Output, open-drain, idle high  |
 
 - The keypad needs no power or ground wire. It only connects rows to columns.
-- The usual header order is R1 R2 R3 R4 C1 C2 C3 C4, from left to right. Test
-  this before you trust it.
+- This keypad has the columns first on its header: C1 C2 C3 C4 R1 R2 R3 R4.
+  The `make probe` test found this order.
 - If the header has 10 pins, leave the 2 outer pins unconnected at first.
 - A wrong wire cannot damage the pins. The rows only pull low, so a wrong order
   only makes a key report as a different key. Fix the order in the `s_rows` and
@@ -157,9 +157,14 @@ row 8 [SDA]  o o o o   -> D14
 
 ```
 header pin   1    2    3    4    5    6    7    8
-keypad       R1   R2   R3   R4   C1   C2   C3   C4
+keypad       C1   C2   C3   C4   R1   R2   R3   R4
 Nucleo       A0   A1   A2   A3   D6   D7   D8   D9
 ```
+
+To find the order of an unknown keypad, run `make probe` in `firmware/`. The
+OLED shows 8 boxes: A0 A1 A2 A3 D6 D7 D8 D9, from left to right. Hold one key,
+and the 2 wires that it connects fill. Keys `1 2 3 A` share row 1. Keys
+`1 4 7 *` share column 1.
 
 Keys map to CHIP-8 by position, not by label:
 

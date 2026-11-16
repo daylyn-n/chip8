@@ -5,3 +5,4 @@ zig-pkg/*
 firmware/stm32_frontend.o
 firmware/rom.bin
 firmware/rom.tmp
+firmware/probe.*

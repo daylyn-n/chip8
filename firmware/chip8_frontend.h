@@ -23,4 +23,10 @@ bool chip8_render(u8 out[1024]);
 
 bool chip8_sound_on(void);
 
+// Key 0x0 to 0xF goes down (true) or up (false).
+void chip8_set_key(u8 key, bool down);
+
+// Seed for CXNN (random numbers).
+void chip8_seed(u32 seed);
+
 #endif

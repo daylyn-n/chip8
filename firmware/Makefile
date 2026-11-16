@@ -27,6 +27,17 @@ rom.bin: FORCE
 firmware.elf: $(SOURCES) $(ZIG_OBJ) chip8_frontend.h rom.bin
 	arm-none-eabi-gcc $(SOURCES) $(ZIG_OBJ) $(CFLAGS) $(LDFLAGS) -o $@
 
+PROBE_SOURCES = startup.c gpio.c i2c.c display.c keypad.c keypad_probe.c
+
+probe.elf: $(PROBE_SOURCES)
+	arm-none-eabi-gcc $(PROBE_SOURCES) $(CFLAGS) $(LDFLAGS) -o $@
+
+probe.bin: probe.elf
+	arm-none-eabi-objcopy -O binary $< $@
+
+probe: probe.bin
+	st-flash --connect-under-reset --reset write $< 0x08000000
+
 firmware.bin: firmware.elf
 	arm-none-eabi-objcopy -O binary $< $@
 
@@ -34,8 +45,8 @@ flash: firmware.bin
 	st-flash --connect-under-reset --reset write $< 0x08000000
 
 clean: 
-	rm -rf firmware.* $(ZIG_OBJ) rom.bin rom.tmp
+	rm -rf firmware.* probe.* $(ZIG_OBJ) rom.bin rom.tmp
 
-.PHONY: all clean flash FORCE
+.PHONY: all clean flash probe FORCE
 
 FORCE:
