@@ -41,3 +41,12 @@ Wiring is in `cheatsheet.md`.
 ## Demo
 
 ![CHIP-8 on the STM32 with the OLED and the keypad](progress/playback.gif)
+
+## Gallery
+
+- first time using a logic analyzer, was pretty neat to see how i2c communication work
+  <img width="1536" height="1116" alt="image" src="https://github.com/user-attachments/assets/2e4ac336-ccd4-484d-a912-0b8008e7fe83" />
+
+<img width="1440" height="1920" alt="image" src="https://github.com/user-attachments/assets/203458c5-7524-4423-bb76-28860643b863" />
+
+<img width="1440" height="1920" alt="image" src="https://github.com/user-attachments/assets/530f82b4-3d57-427d-9e9c-c7ea007e578f" />
