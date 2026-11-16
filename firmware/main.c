@@ -1,3 +1,4 @@
+#include "chip8_frontend.h"
 #include "display.h"
 #include "gpio.h"
 #include "i2c.h"
@@ -16,12 +17,20 @@ static void fail(void) {
   }
 }
 
-// Display test for the OLED and the logic analyzer.
-//
-// display_init() finds the screen and turns it on. The loop then
-// switches every second between "all pixels on" and "show RAM".
-// RAM is random after power-on, so "show RAM" looks like noise.
-//
+static bool s_chip8[CHIP8_WIDTH * CHIP8_HEIGHT];
+static u8 s_frame[1024];
+
+static void checkerboard(void) {
+  for (u32 y = 0; y < CHIP8_HEIGHT; y++) {
+    for (u32 x = 0; x < CHIP8_WIDTH; x++) {
+      s_chip8[y * CHIP8_WIDTH + x] = (x / 4 + y / 4) % 2 == 0;
+    }
+  }
+  chip8_to_oled(s_chip8, s_frame);
+}
+
+// Display test: draws a 64x32 CHIP-8 checkerboard of 4x4 squares.
+// The Zig conversion scales it to 8x8 squares on the screen.
 // LED slow blink = OK. LED fast blink = an I2C transfer failed.
 int main(void) {
   RCC->AHB1ENR |= (1u << 0); // GPIOA clock on, for the LED
@@ -33,17 +42,16 @@ int main(void) {
   if (display_init() != I2C_OK) {
     fail();
   }
+  if (display_clear() != I2C_OK) {
+    fail();
+  }
+
+  checkerboard();
+  if (mcu_ram_to_display(s_frame) != I2C_OK) {
+    fail();
+  }
 
   while (1) {
-    if (display_command(0xA5) != I2C_OK) { // every pixel on, ignores RAM
-      fail();
-    }
-    GPIOA->ODR ^= (1u << PA5);
-    delay(1000000);
-
-    if (display_command(0xA4) != I2C_OK) { // pixels follow RAM again
-      fail();
-    }
     GPIOA->ODR ^= (1u << PA5);
     delay(1000000);
   }

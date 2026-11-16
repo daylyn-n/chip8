@@ -6,11 +6,19 @@ LDFLAGS ?= -Tf446re.ld -nostartfiles -nostdlib --specs nano.specs -lc -lgcc -Wl,
 
 SOURCES = startup.c main.c gpio.c i2c.c display.c
 
+ZIG_SRC = ../src/stm32_frontend.zig
+ZIG_DEPS = $(wildcard ../src/*.zig)
+ZIG_OBJ = stm32_frontend.o
+ZIGFLAGS = -target thumb-freestanding-eabihf -mcpu cortex_m4 -O ReleaseSmall -fno-unwind-tables
+
 build: firmware.elf
 
 
-firmware.elf: $(SOURCES)
-	arm-none-eabi-gcc $(SOURCES) $(CFLAGS) $(LDFLAGS) -o $@
+$(ZIG_OBJ): $(ZIG_DEPS)
+	zig build-obj $(ZIGFLAGS) -femit-bin=$@ $(ZIG_SRC)
+
+firmware.elf: $(SOURCES) $(ZIG_OBJ) chip8_frontend.h
+	arm-none-eabi-gcc $(SOURCES) $(ZIG_OBJ) $(CFLAGS) $(LDFLAGS) -o $@
 
 firmware.bin: firmware.elf
 	arm-none-eabi-objcopy -O binary $< $@
@@ -19,6 +27,6 @@ flash: firmware.bin
 	st-flash --reset write $< 0x08000000
 
 clean: 
-	rm -rf firmware.*
+	rm -rf firmware.* $(ZIG_OBJ)
 
 .PHONY: all clean flash

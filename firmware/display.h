@@ -16,8 +16,6 @@ I2cResult display_init(void);
 I2cResult display_command(u8 cmd);
 I2cResult display_commands(const u8 *cmds, u32 len);
 
-// TODO
-
 // Writes zeros to all 8 pages of the screens ram
 // 1 page is a hortizontal band that is 8 pixels high
 I2cResult display_clear(void);

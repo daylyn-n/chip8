@@ -2,3 +2,4 @@
 zig-out/*
 zig-cache/*
 zig-pkg/*
+firmware/stm32_frontend.o
