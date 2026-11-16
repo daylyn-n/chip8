@@ -37,3 +37,7 @@ Still to do:
 - Buzzer for the sound timer.
 
 Wiring is in `cheatsheet.md`.
+
+## Demo
+
+![CHIP-8 on the STM32 with the OLED and the keypad](progress/playback.gif)
