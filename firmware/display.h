@@ -18,5 +18,5 @@ I2cResult display_commands(const u8 *cmds, u32 len);
 // TODO
 I2cResult display_clear();
 I2cResult display_set_pixel(u8 x, u8 y, bool on);
-
+I2cResult mcu_ram_to_display(char buffer[1024]);
 #endif

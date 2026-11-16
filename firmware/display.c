@@ -23,6 +23,7 @@ I2cResult display_commands(const u8 *cmds, u32 len) {
 I2cResult display_command(u8 cmd) { return display_commands(&cmd, 1); }
 
 // chapter 9 of the SSD1306 data sheet for each of the commands
+//
 static const u8 init_cmds[] = {
     0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40, 0x8D, 0x14, 0xA1, 0xC8,
     0xDA, 0x12, 0x81, 0x7F, 0xD9, 0xF1, 0xDB, 0x40, 0xA4, 0xA6, 0xAF,
@@ -39,4 +40,30 @@ I2cResult display_init(void) {
     }
   }
   return display_commands(init_cmds, sizeof init_cmds);
+}
+
+I2cResult display_clear(void) {
+  for (u8 page = 0; page < 8; page++) {
+    const u8 cmds[] = {0xB0 | page, 0x00, 0x10};
+    I2cResult r = display_commands(cmds, sizeof cmds);
+    if (r != I2C_OK) {
+      return r;
+    }
+
+    r = i2c1_begin(s_addr);
+    if (r == I2C_OK) {
+      r = i2c1_send(CONTROL_DATA);
+    }
+    for (u32 i = 0; i < 132 && r == I2C_OK; i++) {
+      r = i2c1_send(0x00);
+    }
+    I2cResult end = i2c1_end();
+    if (r != I2C_OK) {
+      return r;
+    }
+    if (end != I2C_OK) {
+      return end;
+    }
+  }
+  return I2C_OK;
 }
