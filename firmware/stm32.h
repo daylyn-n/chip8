@@ -45,9 +45,11 @@ typedef struct {
 } GPIO;
 #define GPIOA_BASE 0x40020000UL
 #define GPIOB_BASE 0x40020400UL
+#define GPIOC_BASE 0x40020800UL
 
 #define GPIOA ((GPIO *)GPIOA_BASE)
 #define GPIOB ((GPIO *)GPIOB_BASE)
+#define GPIOC ((GPIO *)GPIOC_BASE)
 typedef struct {
   volatile u32 CR1;
   volatile u32 CR2;

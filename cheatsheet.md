@@ -132,6 +132,45 @@ row 7 [SCL]  o o o o   -> D15
 row 8 [SDA]  o o o o   -> D14
 ```
 
+### STM32 (Nucleo-F446RE) to 4x4 keypad
+
+| Keypad pin | Nucleo pin | STM32 pin | Mode                           |
+| ---------- | ---------- | --------- | ------------------------------ |
+| Row 1      | A0         | PA0       | Output, open-drain, idle high  |
+| Row 2      | A1         | PA1       | Output, open-drain, idle high  |
+| Row 3      | A2         | PA4       | Output, open-drain, idle high  |
+| Row 4      | A3         | PB0       | Output, open-drain, idle high  |
+| Column 1   | D6         | PB10      | Input, pull-up                 |
+| Column 2   | D7         | PA8       | Input, pull-up                 |
+| Column 3   | D8         | PA9       | Input, pull-up                 |
+| Column 4   | D9         | PC7       | Input, pull-up                 |
+
+- The keypad needs no power or ground wire. It only connects rows to columns.
+- The usual header order is R1 R2 R3 R4 C1 C2 C3 C4, from left to right. Test
+  this before you trust it.
+- If the header has 10 pins, leave the 2 outer pins unconnected at first.
+- A wrong wire cannot damage the pins. The rows only pull low, so a wrong order
+  only makes a key report as a different key. Fix the order in the `s_rows` and
+  `s_cols` tables in `firmware/keypad.c`.
+- Do not use these pins for the keypad: PA5 (LED), PB8 and PB9 (I2C),
+  PA13 and PA14 (ST-Link SWD), PA2 and PA3 (ST-Link serial port).
+
+```
+header pin   1    2    3    4    5    6    7    8
+keypad       R1   R2   R3   R4   C1   C2   C3   C4
+Nucleo       A0   A1   A2   A3   D6   D7   D8   D9
+```
+
+Keys map to CHIP-8 by position, not by label:
+
+```
+Keypad label     CHIP-8 key
+1 2 3 A          1 2 3 C
+4 5 6 B          4 5 6 D
+7 8 9 C          7 8 9 E
+* 0 # D          A 0 B F
+```
+
 ### Logic analyzer
 
 Plug the analyzer wires into free holes in the same rows as the OLED pins.

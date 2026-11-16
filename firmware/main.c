@@ -2,6 +2,7 @@
 #include "display.h"
 #include "gpio.h"
 #include "i2c.h"
+#include "keypad.h"
 #include "stm32.h"
 
 static void delay(volatile u32 count) {
@@ -72,6 +73,7 @@ int main(void) {
   gpio_set_mode(GPIOA, PA5, GPIO_OUTPUT);
 
   i2c1_init(I2C_400KHZ);
+  keypad_init();
 
   if (display_init() != I2C_OK) {
     fail();
