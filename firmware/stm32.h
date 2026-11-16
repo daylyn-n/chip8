@@ -75,4 +75,15 @@ typedef struct {
 #define I2C1_BASE 0x40005400UL
 #define I2C1 ((I2C *)I2C1_BASE)
 
+#define CPU_HZ 16000000u // HSI after reset
+
+typedef struct {
+  volatile u32 CTRL; // bit 0 enable, bit 2 CPU clock, bit 16 COUNTFLAG
+  volatile u32 LOAD; // counts down from LOAD to 0, 24 bits
+  volatile u32 VAL;
+  volatile u32 CALIB;
+} SysTick_Regs;
+#define SYSTICK_BASE 0xE000E010UL
+#define SYSTICK ((SysTick_Regs *)SYSTICK_BASE)
+
 #endif

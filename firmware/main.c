@@ -17,21 +17,51 @@ static void fail(void) {
   }
 }
 
-static bool s_chip8[CHIP8_WIDTH * CHIP8_HEIGHT];
+#define SYSTICK_ENABLE (1u << 0)
+#define SYSTICK_CPU_CLOCK (1u << 2)
+#define SYSTICK_COUNTFLAG (1u << 16)
+
+extern const u8 chip8_rom[];
+extern const u8 chip8_rom_end[];
+
 static u8 s_frame[1024];
 
-static void checkerboard(void) {
-  for (u32 y = 0; y < CHIP8_HEIGHT; y++) {
-    for (u32 x = 0; x < CHIP8_WIDTH; x++) {
-      s_chip8[y * CHIP8_WIDTH + x] = (x / 4 + y / 4) % 2 == 0;
-    }
+static void led_on(bool on) {
+  if (on) {
+    GPIOA->ODR |= (1u << PA5);
+  } else {
+    GPIOA->ODR &= ~(1u << PA5);
   }
-  chip8_to_oled(s_chip8, s_frame);
 }
 
-// Display test: draws a 64x32 CHIP-8 checkerboard of 4x4 squares.
-// The Zig conversion scales it to 8x8 squares on the screen.
-// LED slow blink = OK. LED fast blink = an I2C transfer failed.
+// CHIP-8 error: blink `code` times, pause, repeat forever.
+static void chip8_fail(int code) {
+  while (1) {
+    for (int i = 0; i < code; i++) {
+      led_on(true);
+      delay(400000);
+      led_on(false);
+      delay(400000);
+    }
+    delay(2000000);
+  }
+}
+
+// SysTick wraps 60 times per second. COUNTFLAG is set at each wrap.
+static void systick_init_60hz(void) {
+  SYSTICK->LOAD = CPU_HZ / 60u - 1u;
+  SYSTICK->VAL = 0;
+  SYSTICK->CTRL = SYSTICK_CPU_CLOCK | SYSTICK_ENABLE;
+}
+
+static void wait_frame(void) {
+  while ((SYSTICK->CTRL & SYSTICK_COUNTFLAG) == 0) {
+  }
+}
+
+// Runs the ROM from rom.bin (make ROM=...) at 60 frames per second.
+// LED: on/off each second = running. Fast blink = I2C error.
+// N blinks, then a pause = CHIP-8 error N (see chip8_frontend.h).
 int main(void) {
   RCC->AHB1ENR |= (1u << 0); // GPIOA clock on, for the LED
   (void)RCC->AHB1ENR;
@@ -46,13 +76,27 @@ int main(void) {
     fail();
   }
 
-  checkerboard();
-  if (mcu_ram_to_display(s_frame) != I2C_OK) {
-    fail();
+  int r = chip8_init(chip8_rom, (u32)(chip8_rom_end - chip8_rom));
+  if (r != CHIP8_OK) {
+    chip8_fail(r);
   }
 
+  systick_init_60hz();
+  u32 frames = 0;
   while (1) {
-    GPIOA->ODR ^= (1u << PA5);
-    delay(1000000);
+    wait_frame();
+
+    r = chip8_frame();
+    if (r != CHIP8_OK) {
+      chip8_fail(r);
+    }
+
+    if (chip8_render(s_frame) && mcu_ram_to_display(s_frame) != I2C_OK) {
+      fail();
+    }
+
+    if (++frames % 60u == 0) {
+      GPIOA->ODR ^= (1u << PA5);
+    }
   }
 }
