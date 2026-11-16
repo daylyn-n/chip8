@@ -8,6 +8,10 @@
 // The address that answered in display_init(). 0 = not found.
 static u8 s_addr = 0;
 
+#define COLUMN_OFFSET 2
+
+static u8 s_fb[1024];
+
 I2cResult display_commands(const u8 *cmds, u32 len) {
   I2cResult r = i2c1_begin(s_addr);
   if (r == I2C_OK) {
@@ -43,6 +47,9 @@ I2cResult display_init(void) {
 }
 
 I2cResult display_clear(void) {
+  for (u32 i = 0; i < sizeof s_fb; i++) {
+    s_fb[i] = 0;
+  }
   for (u8 page = 0; page < 8; page++) {
     const u8 cmds[] = {0xB0 | page, 0x00, 0x10};
     I2cResult r = display_commands(cmds, sizeof cmds);
@@ -56,6 +63,69 @@ I2cResult display_clear(void) {
     }
     for (u32 i = 0; i < 132 && r == I2C_OK; i++) {
       r = i2c1_send(0x00);
+    }
+    I2cResult end = i2c1_end();
+    if (r != I2C_OK) {
+      return r;
+    }
+    if (end != I2C_OK) {
+      return end;
+    }
+  }
+  return I2C_OK;
+}
+
+I2cResult display_set_pixel(u8 x, u8 y, bool on) {
+  if (x >= 128 || y >= 64) {
+    return I2C_OK;
+  }
+
+  u8 page = y / 8;
+  u8 mask = (u8)(1u << (y % 8));
+  u8 *cell = &s_fb[page * 128u + x];
+  if (on) {
+    *cell |= mask;
+  } else {
+    *cell &= (u8)~mask;
+  }
+
+  u8 col = x + COLUMN_OFFSET;
+  const u8 cmds[] = {0xB0 | page, col & 0x0F, 0x10 | (col >> 4)};
+  I2cResult r = display_commands(cmds, sizeof cmds);
+  if (r != I2C_OK) {
+    return r;
+  }
+
+  r = i2c1_begin(s_addr);
+  if (r == I2C_OK) {
+    r = i2c1_send(CONTROL_DATA);
+  }
+  if (r == I2C_OK) {
+    r = i2c1_send(*cell);
+  }
+  I2cResult end = i2c1_end();
+  return r != I2C_OK ? r : end;
+}
+
+I2cResult mcu_ram_to_display(const u8 buffer[1024]) {
+  for (u32 i = 0; i < sizeof s_fb; i++) {
+    s_fb[i] = buffer[i];
+  }
+
+  for (u8 page = 0; page < 8; page++) {
+    const u8 cmds[] = {0xB0 | page, COLUMN_OFFSET & 0x0F,
+                       0x10 | (COLUMN_OFFSET >> 4)};
+    I2cResult r = display_commands(cmds, sizeof cmds);
+    if (r != I2C_OK) {
+      return r;
+    }
+
+    r = i2c1_begin(s_addr);
+    if (r == I2C_OK) {
+      r = i2c1_send(CONTROL_DATA);
+    }
+    for (u32 i = 0; i < 128 && r == I2C_OK; i++) {
+      r = i2c1_send(s_fb[page * 128u + i]);
     }
     I2cResult end = i2c1_end();
     if (r != I2C_OK) {
