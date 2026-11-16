@@ -107,32 +107,62 @@ I2cResult display_set_pixel(u8 x, u8 y, bool on) {
   return r != I2C_OK ? r : end;
 }
 
+static I2cResult send_columns(u8 page, u8 x0, u8 x1) {
+  u8 col = x0 + COLUMN_OFFSET;
+  const u8 cmds[] = {0xB0 | page, col & 0x0F, 0x10 | (col >> 4)};
+  I2cResult r = display_commands(cmds, sizeof cmds);
+  if (r != I2C_OK) {
+    return r;
+  }
+
+  r = i2c1_begin(s_addr);
+  if (r == I2C_OK) {
+    r = i2c1_send(CONTROL_DATA);
+  }
+  for (u32 x = x0; x <= x1 && r == I2C_OK; x++) {
+    r = i2c1_send(s_fb[page * 128u + x]);
+  }
+  I2cResult end = i2c1_end();
+  return r != I2C_OK ? r : end;
+}
+
 I2cResult mcu_ram_to_display(const u8 buffer[1024]) {
   for (u32 i = 0; i < sizeof s_fb; i++) {
     s_fb[i] = buffer[i];
   }
 
   for (u8 page = 0; page < 8; page++) {
-    const u8 cmds[] = {0xB0 | page, COLUMN_OFFSET & 0x0F,
-                       0x10 | (COLUMN_OFFSET >> 4)};
-    I2cResult r = display_commands(cmds, sizeof cmds);
+    I2cResult r = send_columns(page, 0, 127);
     if (r != I2C_OK) {
       return r;
+    }
+  }
+  return I2C_OK;
+}
+
+I2cResult display_update(const u8 buffer[1024]) {
+  for (u8 page = 0; page < 8; page++) {
+    const u8 *src = &buffer[page * 128u];
+    u8 *dst = &s_fb[page * 128u];
+
+    u32 x0 = 0;
+    while (x0 < 128 && src[x0] == dst[x0]) {
+      x0++;
+    }
+    if (x0 == 128) {
+      continue;
+    }
+    u32 x1 = 127;
+    while (src[x1] == dst[x1]) {
+      x1--;
     }
 
-    r = i2c1_begin(s_addr);
-    if (r == I2C_OK) {
-      r = i2c1_send(CONTROL_DATA);
+    for (u32 x = x0; x <= x1; x++) {
+      dst[x] = src[x];
     }
-    for (u32 i = 0; i < 128 && r == I2C_OK; i++) {
-      r = i2c1_send(s_fb[page * 128u + i]);
-    }
-    I2cResult end = i2c1_end();
+    I2cResult r = send_columns(page, (u8)x0, (u8)x1);
     if (r != I2C_OK) {
       return r;
-    }
-    if (end != I2C_OK) {
-      return end;
     }
   }
   return I2C_OK;

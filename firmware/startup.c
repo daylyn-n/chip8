@@ -2,6 +2,7 @@
 int main(void);
 // startup: runs on reset, before main
 extern void _estack(void); // defined in f446re.ld
+void systick_handler(void); // defined in main.c
 
 // Section bounds, defined in f446re.ld. Only their addresses matter.
 // The linker script aligns all of them to 4 bytes.
@@ -29,4 +30,4 @@ __attribute__((noreturn)) void _reset(void) {
 
 /* 16 core entries + 91 STM32F446 interrupts */
 __attribute__((section(".vectors"))) void (*const tab[16 + 91])(void) = {
-    _estack, _reset};
+    _estack, _reset, [15] = systick_handler};

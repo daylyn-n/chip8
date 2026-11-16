@@ -22,4 +22,9 @@ I2cResult display_clear(void);
 
 I2cResult display_set_pixel(u8 x, u8 y, bool on);
 I2cResult mcu_ram_to_display(const u8 buffer[1024]);
+
+// Sends only the columns that differ from the last frame.
+// The screen must match s_fb first: call display_clear() or
+// mcu_ram_to_display() one time before you use it.
+I2cResult display_update(const u8 buffer[1024]);
 #endif

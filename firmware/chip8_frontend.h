@@ -3,10 +3,24 @@
 
 #include "stm32.h"
 
-#define CHIP8_WIDTH 64
-#define CHIP8_HEIGHT 32
+// C side of src/stm32_frontend.zig.
 
-void chip8_to_oled(const bool display[CHIP8_WIDTH * CHIP8_HEIGHT],
-                   u8 out[1024]);
+enum {
+  CHIP8_OK = 0,
+  CHIP8_ROM_TOO_LARGE = 1,
+  CHIP8_STACK_OVERFLOW = 2,
+  CHIP8_STACK_UNDERFLOW = 3,
+};
+
+// Resets the machine and copies the ROM to 0x200.
+int chip8_init(const u8 *rom, u32 len);
+
+// Runs one frame: 11 instructions, then one timer tick. Call 60 times/second.
+int chip8_frame(void);
+
+// Fills out with an OLED frame. Returns false if the screen did not change.
+bool chip8_render(u8 out[1024]);
+
+bool chip8_sound_on(void);
 
 #endif

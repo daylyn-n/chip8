@@ -3,3 +3,5 @@ zig-out/*
 zig-cache/*
 zig-pkg/*
 firmware/stm32_frontend.o
+firmware/rom.bin
+firmware/rom.tmp
