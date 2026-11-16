@@ -9,14 +9,31 @@ zig build run -- rom/ibm_logo.ch8
 zig build test
 ```
 
-## STM32 port (planned)
+## STM32 port
 
-The emulator core (`src/chip8.zig`) has no file I/O, no allocator, and no platform code, so the same core can run on a microcontroller.
+The emulator core (`src/chip8.zig`) has no file I/O, no allocator, and no platform code, so the same core runs on the PC (SDL) and on an STM32F446RE (Nucleo board).
 
-The plan is to port it to an STM32F446RE with:
+The firmware in `firmware/` is bare-metal C (no HAL). The Zig core links into it as one object file.
 
-- an OLED screen (128x64, each CHIP-8 pixel drawn as a 2x2 block)
-- a 4x4 button matrix for the 16-key CHIP-8 keypad
-- a buzzer for the sound timer
+```
+cd firmware
+make flash                                   # rom/ibm_logo.ch8
+make flash ROM="../rom/Pong (1 player).ch8"  # any other ROM
+make probe                                   # keypad wiring test
+```
 
-The desktop version will use SDL for the window, input, and sound.
+Works now:
+
+- 128x64 SH1106/SSD1306 OLED over I2C at 400 kHz. Each CHIP-8 pixel is a 2x2 block. Only changed columns are sent.
+- 4x4 matrix keypad, scanned once per frame. Keys map to CHIP-8 by position.
+- 60 Hz timing from SysTick, about 11 instructions per frame. Missed frames run after a slow screen update.
+- The ROM is built into flash. Choose it with `ROM=`.
+- Passes `3-corax+.ch8`, `4-flags.ch8` and `6-keypad.ch8` on the board.
+- LED: on/off each second = running. Fast blink = I2C error. N blinks = CHIP-8 error N.
+
+Still to do:
+
+- Random seed: test it on the board. The code seeds `CXNN` from SysTick at the first key press.
+- Buzzer for the sound timer.
+
+Wiring is in `cheatsheet.md`.
