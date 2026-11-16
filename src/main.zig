@@ -3,6 +3,7 @@ const std = @import("std");
 test {
     _ = @import("chip8.zig");
     _ = @import("sdl_frontend.zig");
+    _ = @import("stm32_frontend.zig");
 }
 const chip = @import("chip8.zig");
 const sdl_frontend = @import("sdl_frontend.zig");
